@@ -49,16 +49,45 @@ bool usb_remote_wakeup()
     return true;
 }
 
+/* An HS IN endpoint drops a new report while the previous one has not been fetched by the host yet
+ * (USBHS_Endp_DataUp returns 0). Wait up to 8 ms for it: losing e.g. the "mods + key" report after a
+ * "mods only" report breaks LSA(kc) and friends, losing a release report leaves a key "held". */
+static bool usbhs_send(uint8_t endp, uint8_t *data, uint8_t len)
+{
+    if (USBHS_DevEnumStatus == 0) {
+        return false;
+    }
+    for (uint8_t i = 0; i < 80 && (USBHS_Endp_Busy[endp] & DEF_UEP_BUSY); i++) {
+        DelayUs(100);
+    }
+    return USBHS_Endp_DataUp(endp, data, len, DEF_UEP_CPY_LOAD) != 0;
+}
+
+#if (USB_PORT_CONFIG != USB_PORT_HIGH_SPEED)
+/* Same for FS: the endpoint answers ACK while a report is still pending, NAK once the host took it. */
+static void usbfs_wait_ep_free(volatile uint8_t *ep_ctrl)
+{
+    if (USBFS_DevEnumStatus == 0) {
+        return;
+    }
+    for (uint8_t i = 0; i < 80 && ((*ep_ctrl & MASK_UEP_T_RES) == UEP_T_RES_ACK); i++) {
+        DelayUs(100);
+    }
+}
+#endif
+
 bool hid_keyboard_send_report(uint8_t mode, uint8_t *data, uint8_t len)
 {
     (void)mode;
 
 #if (USB_PORT_CONFIG == USB_PORT_HIGH_SPEED)
-    USBHS_Endp_DataUp(DEF_UEP1, data, len, DEF_UEP_CPY_LOAD);
+    usbhs_send(DEF_UEP1, data, len);
 #elif (USB_PORT_CONFIG == USB_PORT_FULL_SPEED)
+    usbfs_wait_ep_free(&R8_UEP1_CTRL);
     USBFS_SendKeyboardReport(data);
 #elif (USB_PORT_CONFIG == USB_PORT_DUAL_BOTH)
-    USBHS_Endp_DataUp(DEF_UEP1, data, len, DEF_UEP_CPY_LOAD);
+    usbhs_send(DEF_UEP1, data, len);
+    usbfs_wait_ep_free(&R8_UEP1_CTRL);
     USBFS_SendKeyboardReport(data);
 #endif
 
@@ -71,11 +100,27 @@ void hid_keyboard_send_last_bios_report()
     hid_keyboard_send_report(KEYBOARD_MODE_BIOS, keyboard_last_bios_report, 8);
 }
 
+/* Mouse, system control and consumer (media) reports share interface 1 / EP2; data[0] is the report ID. */
+static bool usbhs_send_extra(uint8_t *data, uint8_t len)
+{
+    return usbhs_send(DEF_UEP2, data, len);
+}
+
 bool hid_exkey_send_report(uint8_t *data, uint8_t len)
 {
-    (void)data;
-    (void)len;
-    return true;
+#if (USB_PORT_CONFIG == USB_PORT_HIGH_SPEED)
+    return usbhs_send_extra(data, len);
+#elif (USB_PORT_CONFIG == USB_PORT_FULL_SPEED)
+    usbfs_wait_ep_free(&R8_UEP2_CTRL);
+    return USBFS_SendExtraReport(data, len);
+#elif (USB_PORT_CONFIG == USB_PORT_DUAL_BOTH)
+    bool hs = usbhs_send_extra(data, len);
+    usbfs_wait_ep_free(&R8_UEP2_CTRL);
+    bool fs = USBFS_SendExtraReport(data, len);
+    return hs || fs;
+#else
+    return false;
+#endif
 }
 
 bool hid_qmk_raw_send_report(uint8_t *data, uint8_t len)

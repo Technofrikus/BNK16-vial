@@ -20,6 +20,9 @@ void USBFS_SendKeyboardReport(uint8_t *report);
 // 发送鼠标报告（4字节）
 void USBFS_SendMouseReport(uint8_t *report);
 
+// Send a report on the shared mouse/system/consumer interface (first byte = report ID)
+uint8_t USBFS_SendExtraReport(uint8_t *report, uint8_t len);
+
 // 发送Raw HID数据
 uint8_t USBFS_RawHID_Send(uint8_t *data, uint8_t len);
 

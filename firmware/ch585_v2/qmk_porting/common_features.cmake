@@ -296,6 +296,15 @@ if(VIAL_ENABLE)
     list(APPEND quantum_SOURCES
         "${QMK_BASE_DIR}/quantum/vial.c"
     )
+
+    # VialRGB: enables the Lighting tab in Vial (needs RGB_MATRIX and "lighting": "vialrgb" in vial.json)
+    if(VIALRGB_ENABLE)
+        add_definitions(-DVIALRGB_ENABLE)
+        message(STATUS "VIALRGB_ENABLE")
+        list(APPEND quantum_SOURCES
+            "${QMK_BASE_DIR}/quantum/vialrgb.c"
+        )
+    endif()
 endif()
 
 # DIP_SWITCH_ENABLE
@@ -360,6 +369,7 @@ if(RGB_MATRIX_ENABLE)
         "${QMK_BASE_DIR}/quantum/rgb_matrix/*.c"
         "${QMK_BASE_DIR}/quantum/color.c"
         "${QMK_BASE_DIR}/quantum/process_keycode/process_rgb.c"
+        "${QMK_BASE_DIR}/quantum/process_keycode/process_underglow.c"
         "${QMK_BASE_DIR}/quantum/process_keycode/process_rgb_matrix.c"
         "${QMK_BASE_DIR}/lib/lib8tion/*.c"
     )
@@ -464,6 +474,7 @@ if(WS2812_REQUIRED)
     message(STATUS "WS2812_REQUIRED")
     message(STATUS "WS2812_DRIVER = ${WS2812_DRIVER}")
     include_directories(${QMK_BASE_DIR}/drivers)
+    include_directories(${QMK_BASE_DIR}/drivers/led)
     include_directories(${CMAKE_CURRENT_LIST_DIR}/drivers/ws2812)
 
     if(WS2812_DRIVER STREQUAL "spi")

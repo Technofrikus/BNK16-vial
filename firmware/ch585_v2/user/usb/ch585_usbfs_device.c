@@ -67,7 +67,7 @@ const uint8_t FS_MyCfgDescr[] = {
     0x81,                                                   // bEndpointAddress: IN Endpoint 1
     0x03,                                                   // bmAttributes
     DevEP1SIZE, 0x00,                                       // wMaxPacketSize
-    0x0A,                                                   // bInterval: 10mS
+    0x01,                                                   // bInterval: 1 ms
 
     /* Interface Descriptor (Mouse) */
     0x09,                                                   // bLength
@@ -76,8 +76,8 @@ const uint8_t FS_MyCfgDescr[] = {
     0x00,                                                   // bAlternateSetting
     0x01,                                                   // bNumEndpoints
     0x03,                                                   // bInterfaceClass
-    0x01,                                                   // bInterfaceSubClass
-    0x02,                                                   // bInterfaceProtocol: Mouse
+    0x00,                                                   // bInterfaceSubClass: none (report IDs, no boot protocol)
+    0x00,                                                   // bInterfaceProtocol: mouse + system + consumer
     0x00,                                                   // iInterface
 
     /* HID Descriptor (Mouse) */
@@ -87,7 +87,7 @@ const uint8_t FS_MyCfgDescr[] = {
     0x00,                                                   // bCountryCode
     0x01,                                                   // bNumDescriptors
     0x22,                                                   // bDescriptorType
-    0x34, 0x00,                                             // wDescriptorLength
+    0x6B, 0x00,                                             // wDescriptorLength
 
     /* Endpoint Descriptor (Mouse) */
     0x07,                                                   // bLength
@@ -171,32 +171,61 @@ const uint8_t FS_KeyRepDesc[] = {
 
 // 鼠标报告描述符
 const uint8_t FS_MouseRepDesc[] = {
+    /* Mouse, report ID 2 (QMK REPORT_ID_MOUSE): buttons, X, Y, wheel, AC pan */
     0x05, 0x01,                                             // Usage Page (Generic Desktop)
     0x09, 0x02,                                             // Usage (Mouse)
     0xA1, 0x01,                                             // Collection (Application)
-    0x09, 0x01,                                             // Usage (Pointer)
-    0xA1, 0x00,                                             // Collection (Physical)
-    0x05, 0x09,                                             // Usage Page (Button)
-    0x19, 0x01,                                             // Usage Minimum (Button 1)
-    0x29, 0x03,                                             // Usage Maximum (Button 3)
-    0x15, 0x00,                                             // Logical Minimum (0)
-    0x25, 0x01,                                             // Logical Maximum (1)
-    0x75, 0x01,                                             // Report Size (1)
-    0x95, 0x03,                                             // Report Count (3)
-    0x81, 0x02,                                             // Input (Data,Variable,Absolute)
-    0x75, 0x05,                                             // Report Size (5)
-    0x95, 0x01,                                             // Report Count (1)
-    0x81, 0x01,                                             // Input (Constant,Array,Absolute)
-    0x05, 0x01,                                             // Usage Page (Generic Desktop)
-    0x09, 0x30,                                             // Usage (X)
-    0x09, 0x31,                                             // Usage (Y)
-    0x09, 0x38,                                             // Usage (Wheel)
-    0x15, 0x81,                                             // Logical Minimum (-127)
-    0x25, 0x7F,                                             // Logical Maximum (127)
-    0x75, 0x08,                                             // Report Size (8)
-    0x95, 0x03,                                             // Report Count (3)
-    0x81, 0x06,                                             // Input (Data,Variable,Relative)
+    0x85, 0x02,                                             //   Report ID (2)
+    0x09, 0x01,                                             //   Usage (Pointer)
+    0xA1, 0x00,                                             //   Collection (Physical)
+    0x05, 0x09,                                             //     Usage Page (Button)
+    0x19, 0x01,                                             //     Usage Minimum (Button 1)
+    0x29, 0x08,                                             //     Usage Maximum (Button 8)
+    0x15, 0x00,                                             //     Logical Minimum (0)
+    0x25, 0x01,                                             //     Logical Maximum (1)
+    0x95, 0x08,                                             //     Report Count (8)
+    0x75, 0x01,                                             //     Report Size (1)
+    0x81, 0x02,                                             //     Input (Data,Variable,Absolute)
+    0x05, 0x01,                                             //     Usage Page (Generic Desktop)
+    0x09, 0x30,                                             //     Usage (X)
+    0x09, 0x31,                                             //     Usage (Y)
+    0x09, 0x38,                                             //     Usage (Wheel)
+    0x15, 0x81,                                             //     Logical Minimum (-127)
+    0x25, 0x7F,                                             //     Logical Maximum (127)
+    0x95, 0x03,                                             //     Report Count (3)
+    0x75, 0x08,                                             //     Report Size (8)
+    0x81, 0x06,                                             //     Input (Data,Variable,Relative)
+    0x05, 0x0C,                                             //     Usage Page (Consumer)
+    0x0A, 0x38, 0x02,                                       //     Usage (AC Pan)
+    0x95, 0x01,                                             //     Report Count (1)
+    0x81, 0x06,                                             //     Input (Data,Variable,Relative)
+    0xC0,                                                   //   End Collection
     0xC0,                                                   // End Collection
+    /* System control, report ID 3 (QMK REPORT_ID_SYSTEM) */
+    0x05, 0x01,                                             // Usage Page (Generic Desktop)
+    0x09, 0x80,                                             // Usage (System Control)
+    0xA1, 0x01,                                             // Collection (Application)
+    0x85, 0x03,                                             //   Report ID (3)
+    0x19, 0x01,                                             //   Usage Minimum (1)
+    0x2A, 0xB7, 0x00,                                       //   Usage Maximum (0xB7)
+    0x15, 0x01,                                             //   Logical Minimum (1)
+    0x26, 0xB7, 0x00,                                       //   Logical Maximum (0xB7)
+    0x95, 0x01,                                             //   Report Count (1)
+    0x75, 0x10,                                             //   Report Size (16)
+    0x81, 0x00,                                             //   Input (Data,Array,Absolute)
+    0xC0,                                                   // End Collection
+    /* Consumer (media keys), report ID 4 (QMK REPORT_ID_CONSUMER) */
+    0x05, 0x0C,                                             // Usage Page (Consumer)
+    0x09, 0x01,                                             // Usage (Consumer Control)
+    0xA1, 0x01,                                             // Collection (Application)
+    0x85, 0x04,                                             //   Report ID (4)
+    0x19, 0x01,                                             //   Usage Minimum (1)
+    0x2A, 0xA0, 0x02,                                       //   Usage Maximum (0x2A0)
+    0x15, 0x01,                                             //   Logical Minimum (1)
+    0x26, 0xA0, 0x02,                                       //   Logical Maximum (0x2A0)
+    0x95, 0x01,                                             //   Report Count (1)
+    0x75, 0x10,                                             //   Report Size (16)
+    0x81, 0x00,                                             //   Input (Data,Array,Absolute)
     0xC0                                                    // End Collection
 };
 
@@ -701,6 +730,15 @@ void USBFS_SendMouseReport(uint8_t *report)
 {
     memcpy(pEP2_IN_DataBuf, report, 4);
     DevEP2_IN_Deal(4);
+}
+
+// Send a report on the shared mouse/system/consumer interface (EP2, first byte = report ID)
+uint8_t USBFS_SendExtraReport(uint8_t *report, uint8_t len)
+{
+    if(USBFS_DevEnumStatus == 0) return 0;
+    memcpy(pEP2_IN_DataBuf, report, len);
+    DevEP2_IN_Deal(len);
+    return 1;
 }
 
 // 发送Raw HID数据

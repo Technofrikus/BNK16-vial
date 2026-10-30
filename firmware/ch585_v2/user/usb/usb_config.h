@@ -12,6 +12,8 @@
 #define USB_PORT_DUAL_BOTH     4  // 双口同时工作（不切换，插哪个都能用）
 
 // 当前USB口配置（修改这里即可切换）
-#define USB_PORT_CONFIG  USB_PORT_DUAL_BOTH
+/* BNK16: high speed only. The board's USB connector is on the HS port, and the full speed
+ * port would claim PB10/PB11; PB10 is the common line of the 4-position layer switch. */
+#define USB_PORT_CONFIG  USB_PORT_HIGH_SPEED
 
 #endif

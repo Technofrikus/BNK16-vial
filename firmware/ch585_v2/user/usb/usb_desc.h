@@ -64,7 +64,7 @@
 #define DEF_USBD_DEVICE_DESC_LEN      ( (uint16_t)MyDevDescr[ 0 ] )
 #define DEF_USBD_CONFIG_DESC_LEN      ( (uint16_t)MyCfgDescr[ 2 ] + ( (uint16_t)MyCfgDescr[ 3 ] << 8 ) )
 #define DEF_USBD_REPORT_DESC_LEN_KB   0x3E
-#define DEF_USBD_REPORT_DESC_LEN_MS   0x34
+#define DEF_USBD_REPORT_DESC_LEN_MS   0x6B
 #define DEF_USBD_REPORT_DESC_LEN_RAW  0x19
 #define DEF_USBD_LANG_DESC_LEN        ( (uint16_t)MyLangDescr[ 0 ] )
 #define DEF_USBD_MANU_DESC_LEN        ( (uint16_t)MyManuInfo[ 0 ] )

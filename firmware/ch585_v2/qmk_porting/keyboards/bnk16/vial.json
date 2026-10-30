@@ -1,0 +1,102 @@
+{
+  "name": "BNK16",
+  "lighting": "vialrgb",
+  "vendorId": "0x1209",
+  "productId": "0x0001",
+  "matrix": {
+    "rows": 5,
+    "cols": 5
+  },
+  "layouts": {
+    "keymap": [
+      [
+        "0,0",
+        "0,1",
+        "0,2",
+        "0,3",
+        {
+          "x": 0.5
+        },
+        "0,0\n\n\n\n\n\n\n\n\ne",
+        "4,0",
+        "0,1\n\n\n\n\n\n\n\n\ne",
+        {
+          "x": 0.5
+        },
+        "1,0\n\n\n\n\n\n\n\n\ne",
+        "4,1",
+        "1,1\n\n\n\n\n\n\n\n\ne"
+      ],
+      [
+        "1,0",
+        "1,1",
+        "1,2",
+        "1,3"
+      ],
+      [
+        "2,0",
+        "2,1",
+        "2,2",
+        "2,3",
+        {
+          "x": 2.25
+        },
+        "2,0\n\n\n\n\n\n\n\n\ne",
+        {
+          "x": 1
+        },
+        "2,1\n\n\n\n\n\n\n\n\ne"
+      ],
+      [
+        "3,0",
+        "3,1",
+        "3,2",
+        "3,3"
+      ],
+      [
+        {
+          "y": 0.25
+        },
+        "0,4",
+        "1,4"
+      ]
+    ]
+  },
+  "customKeycodes": [
+    {
+      "name": "BT_1",
+      "title": "Bluetooth Device 1",
+      "shortName": "BT1"
+    },
+    {
+      "name": "BT_2",
+      "title": "Bluetooth Device 2",
+      "shortName": "BT2"
+    },
+    {
+      "name": "BT_3",
+      "title": "Bluetooth Device 3",
+      "shortName": "BT3"
+    },
+    {
+      "name": "BT_CLEAR",
+      "title": "Clear All Bluetooth Bonding",
+      "shortName": "BTClr"
+    },
+    {
+      "name": "WIRED_MODE",
+      "title": "Switch to Wired USB Mode",
+      "shortName": "USB"
+    },
+    {
+      "name": "FACTORY_RESET",
+      "title": "Factory Reset (long press 5s)",
+      "shortName": "Reset"
+    },
+    {
+      "name": "MOBILE_MODE",
+      "title": "Mobile Mode (long press 3s)",
+      "shortName": "Mobile"
+    }
+  ]
+}
