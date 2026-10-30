@@ -10,9 +10,25 @@
 
 ## Candidate pull requests
 
-GitHub only opens PRs from a real fork, and BNK16-vial is a standalone repo. So fork `NookCraftLab/ch585-qmk-vial` when the first PR is ready and push the topic branches there.
+GitHub only opens PRs from a real fork, and BNK16-vial is a standalone repo. PR branches therefore go to the fork [Technofrikus/ch585-qmk-vial](https://github.com/Technofrikus/ch585-qmk-vial).
 
-Each PR is against `upstream/main`, independent of the others unless noted. To build a branch:
+| Remote | Repository | Use |
+|---|---|---|
+| `origin` | Technofrikus/BNK16-vial | Public BNK16 firmware, branch `main` |
+| `fork` | Technofrikus/ch585-qmk-vial | Topic branches for PRs only |
+| `upstream` | NookCraftLab/ch585-qmk-vial | PR target, never pushed to directly |
+
+To set this up in a fresh clone:
+
+```bash
+git remote add fork https://github.com/Technofrikus/ch585-qmk-vial.git
+```
+
+```bash
+git remote add upstream https://github.com/NookCraftLab/ch585-qmk-vial.git
+```
+
+Each PR is against `upstream/main`, independent of the others unless noted. Never push BNK16-vial's `main` to the fork, because a PR must only contain its own topic. To build a branch and open the PR:
 
 ```bash
 git fetch upstream
@@ -25,6 +41,20 @@ git switch -c <topic> upstream/main
 ```bash
 git restore --source=main -- <files>
 ```
+
+```bash
+git commit -m "fix: <summary>"
+```
+
+```bash
+git push -u fork <topic>
+```
+
+```bash
+gh pr create --repo NookCraftLab/ch585-qmk-vial --base main --head Technofrikus:<topic>
+```
+
+Build the EVB target on the branch before opening the PR, because `bnk16` does not exist on `upstream/main`. Switch back with `git switch main`.
 
 | # | Topic | Files | Before sending |
 |---|---|---|---|
