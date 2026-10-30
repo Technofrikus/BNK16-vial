@@ -14,7 +14,6 @@ Based on [NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch585-qmk
 | Tap Dance, Combos, macros, settings kept after replug | works |
 | Status LED | works: green = USB, blue = BLE, orange = neither |
 | 4-position layer switch | works |
-| Keys in columns 0 and 1 | **open bug:** pressing a key in one of them also triggers the other, e.g. `7` types `78` |
 | Bluetooth, battery, mode switch | not brought up |
 | Haptics | dropped on purpose |
 | `VIAL_INSECURE` | still on: Vial is always unlocked, no unlock combo needed |

@@ -10,7 +10,9 @@
 
 ## Candidate pull requests
 
-Each one is against `upstream/main`, independent of the others unless noted. To build a branch:
+GitHub only opens PRs from a real fork, and BNK16-vial is a standalone repo. So fork `NookCraftLab/ch585-qmk-vial` when the first PR is ready and push the topic branches there.
+
+Each PR is against `upstream/main`, independent of the others unless noted. To build a branch:
 
 ```bash
 git fetch upstream
@@ -35,7 +37,6 @@ git restore --source=main -- <files>
 
 ## Blockers for the board target
 
-- Fix the column 0/1 double trigger.
 - Remove `VIAL_INSECURE`.
 - Replace the pid.codes test ID `1209:0001` with an assigned VID/PID.
 - Bring up the mode switch or remove the BLE keycodes from `vial.json`.
