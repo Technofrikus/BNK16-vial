@@ -81,7 +81,7 @@ Default keymap:
 | Big knob | Mouse wheel (no click switch) |
 | 4-position switch | Selects layer 0-3 |
 
-In Vial the two extra keys below the layout are the layer switch contacts. Leave them on `KC_NO`.
+The switch contacts are matrix (0,4) and (1,4). They are hidden in Vial and always `KC_NO`.
 
 ## Change the firmware
 
@@ -90,7 +90,8 @@ Everything specific to this board is in [firmware/ch585_v2/qmk_porting/keyboards
 | File | Content |
 |---|---|
 | `qmk_config.h` | Pins, encoders, RGB, Vial options |
-| `rules.cmake`, `keymaps/default/rules.cmake` | Feature switches. The keymap file is applied last and wins |
+| `rules.cmake` | Hardware and base settings |
+| `keymaps/default/rules.cmake` | Feature switches |
 | `bnk16.c` | Layer switch, big knob filter, status LED, USB/BLE mode handling, `main()` |
 | `keymaps/default/keymap.c` | Default keymap, custom keycodes |
 | `vial.json` | Layout shown in Vial |

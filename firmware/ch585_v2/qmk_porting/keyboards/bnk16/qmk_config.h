@@ -23,6 +23,7 @@
 #define DIODE_DIRECTION  COL2ROW
 #define HOLD_ON_OTHER_KEY_PRESS
 #define EARLY_INIT_PERFORM_BOOTLOADER_JUMP FALSE
+#define DEBOUNCE 10
 
 /* Encoders (measured): index 0 = small left, index 1 = small right, index 2 = big knob (no switch).
  * Small clicks are matrix (4,0) and (4,1). PB14/PB15 double as the TIO/TCK debug pins, PB16+ have
@@ -69,8 +70,6 @@
 #define ENABLE_RGB_MATRIX_SOLID_SPLASH
 #define ENABLE_RGB_MATRIX_SOLID_MULTISPLASH
 
-#define DEBOUNCE 10
-
 /* Vial */
 #define VIAL_KEYBOARD_UID {0xDE, 0x8B, 0x27, 0x0F, 0x95, 0xED, 0x79, 0xBB}
 /* Always unlocked for now; removing this activates the unlock combo below */
@@ -79,11 +78,7 @@
 #define VIAL_UNLOCK_COMBO_COLS {0, 3}
 #define DYNAMIC_KEYMAP_LAYER_COUNT 4
 
-/* ========================================================================
- * Vial 高阶功能配置（界面可直接配置）
- * ======================================================================== */
-
-/* 核心功能开关 — 确保 vial.h 能检测到并自动开启 VIAL_xxx_ENABLE */
+/* Vial's advanced features: vial.h needs these to enable its VIAL_xxx_ENABLE parts */
 #define TAP_DANCE_ENABLE
 #define VIAL_TAP_DANCE_ENABLE
 #define COMBO_ENABLE
@@ -93,63 +88,18 @@
 #define REPEAT_KEY_ENABLE
 #define VIAL_ALT_REPEAT_KEY_ENABLE
 
-/* Tap Dance 按键舞蹈：按1次/2次/3次/长按触发不同功能 */
 #define VIAL_TAP_DANCE_COUNT 16
 #define TAPPING_TERM 200
 #define TAPPING_TERM_PER_KEY
-
-/* Combo 组合键：同时按多个键触发一个功能 */
 #define VIAL_COMBO_COUNT 16
 #define COMBO_TERM 50
-
-/* Key Override 按键覆盖：修饰键+普通键的组合重映射 */
 #define VIAL_KEY_OVERRIDE_COUNT 16
 
-/* ========================================================================
- * QMK 原生功能参数配置
- * ========================================================================
- * 注意：以下参数只有在 keymaps/default/rules.cmake 里把对应功能的
- * 开关改成 ON 之后才会生效。功能关闭时，这些参数定义了也不会被用到。
- * 想开启某个功能，去 rules.cmake 里找对应的 set(XXX_ENABLE OFF ...) 改成 ON
- * ======================================================================== */
-
-/* --- One Shot 一次性修饰键 --- */
-/* 按一下修饰键（Ctrl/Shift/Alt），它会保持到下一个普通按键，然后自动松开 */
-#define ONESHOT_TAP_TOGGLE 5       /* 连按5次切换该修饰键的永久锁定状态 */
-#define ONESHOT_TIMEOUT 5000        /* 一次性修饰键超时时间（毫秒），超时自动取消 */
-
-/* --- Leader 引导键 --- */
-/* 按一下 Leader 键，然后输入序列（如 L+B+T）触发一个功能，用少量按键扩展大量功能 */
-#define LEADER_TIMEOUT 300           /* 引导序列超时时间（毫秒），超时取消序列 */
-#define LEADER_PER_KEY_TIMING        /* 每个键单独计时，输入慢也不会超时 */
-
-/* --- Auto Shift 自动换挡 --- */
-/* 长按字母键自动输出大写，短按输出小写，可以省掉 Shift 键 */
-#define AUTO_SHIFT_TIMEOUT 150       /* 长按多久算大写（毫秒） */
-#define NO_AUTO_SHIFT_SPECIAL        /* 特殊键（F键/方向键等）不触发自动大写 */
-#define NO_AUTO_SHIFT_NUMERIC        /* 数字键不触发自动大写 */
-
-/* --- Space Cadet 太空学员 --- */
-/* 左 Shift 单击输出 ( ，右 Shift 单击输出 ) ，长按还是 Shift */
-/* 需要键盘上有左右两个 Shift 键才有意义 */
-
-/* --- Caps Word 大写单词 --- */
-/* 双击 Shift 后，下一个单词自动大写，输完空格/标点后自动恢复小写 */
-#define BOTH_SHIFTS_TURNS_ON_CAPS_WORD  /* 同时按左右Shift触发大写单词模式 */
-#define CAPS_WORD_IDLE_TIMEOUT 5000     /* 大写单词模式空闲超时（毫秒），超时自动退出 */
-
-/* --- Secure 安全锁定 --- */
-/* 锁定键盘，需要输入特定解锁序列才能使用，适合蓝牙键盘离开座位时锁键盘 */
-#define SECURE_UNLOCK_TIMEOUT 5000   /* 解锁输入超时（毫秒），超时取消解锁 */
-#define SECURE_IDLE_TIMEOUT 60000    /* 空闲多久自动锁定（毫秒），设0禁用自动锁 */
-
-/* --- Achordion 和弦防误触 --- */
-/* 修饰键需要另一只手的键先按时才生效，防止单手误触修饰键 */
-/* 主要适合家用大键盘，小配列意义不大 */
-#define ACHORDION_STREAK              /* 启用 Streak 模式（连续同手按键不触发） */
-
-/* --- Sentence Case 句首大写 --- */
-/* 检测到句号+空格后，下一个字母自动大写，打字体验优化 */
+/* QMK features switched on in keymaps/default/rules.cmake */
+#define ONESHOT_TAP_TOGGLE 5            /* taps that lock a one-shot modifier */
+#define ONESHOT_TIMEOUT 5000            /* ms */
+#define BOTH_SHIFTS_TURNS_ON_CAPS_WORD
+#define CAPS_WORD_IDLE_TIMEOUT 5000     /* ms */
 
 /* the USB port code overwrites the endpoint buffer, so press and release need a gap */
 #define TAP_CODE_DELAY 30
