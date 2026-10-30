@@ -1,7 +1,7 @@
 /*
  * Binepad BNK16 board config.
- * Matrix, encoder and LED pins are measured on the board (see BNK16-Pinbelegung.txt);
- * layer switch, PB8, VBUS/charger/battery pins are NOT measured yet and are unused here.
+ * Matrix, encoder, LED and layer switch pins are measured on the board, see docs/bnk16/HARDWARE.md.
+ * VBUS, charger, battery and haptics pins are unknown and unused here.
  */
 #pragma once
 
@@ -12,7 +12,7 @@
 #define MANUFACTURER BNK16Vial
 #define PRODUCT      BNK16
 
-/* Matrix (measured on the board): rows PB3 PB2 PB0 PB1 PB21 (row 4 = encoder clicks, found with the click probe; not PB20), cols PB5 PB4 PB6 PB7.
+/* Matrix (measured on the board): rows PB3 PB2 PB0 PB1 PB21 (row 4 = encoder clicks), cols PB5 PB4 PB6 PB7.
  * Col 4 = PB10 is the common line of the 4-position layer switch (traced on the PCB): its two other
  * lines go through diodes to rows 0 (PB3) and 1 (PB2), so the switch position reads as matrix (0,4)/(1,4).
  * PB10 is only free because USB runs on the HS port alone (usb_config.h). */
@@ -33,14 +33,11 @@
  * per detent -> 4 (use 2 if a step only comes every second detent). Big knob: no detents, 20 cycles
  * per turn; 1 counts every intermediate state too (80 steps per turn). */
 #define ENCODER_RESOLUTIONS { 4, 4, 1 }
-/* Diagnostic: show raw encoder pin levels on the key LEDs (green = high, red = low), see bnk16.c */
-// #define BNK16_ENCODER_DEBUG
 
 /* RGB: WS2812 on PA10 (TMR1 PWM + DMA). Chain = 16 key LEDs (row-major) + 1 status LED. */
 #define WS2812_DI_PIN A10
 #define WS2812_DI_HIGH_DRIVE
-/* LED supply is switched by PA11 (found with the pin scanner; PB8 from the stock code is big encoder B).
- * Level is an assumption: if the LEDs stay dark, change WS2812_EN_LEVEL to 0. */
+/* LED supply is switched by PA11, high = on (measured) */
 #define WS2812_EN_PIN A11
 #define WS2812_EN_LEVEL 1
 #define WS2812_PWM_TARGET_PERIOD 800000 /* 800 kHz bit clock (driver default is 10x too slow) */
@@ -76,7 +73,7 @@
 
 /* Vial */
 #define VIAL_KEYBOARD_UID {0xDE, 0x8B, 0x27, 0x0F, 0x95, 0xED, 0x79, 0xBB}
-/* Bring-up only: always unlocked. Remove once the keys work. */
+/* Always unlocked for now; removing this activates the unlock combo below */
 #define VIAL_INSECURE
 #define VIAL_UNLOCK_COMBO_ROWS {0, 0}
 #define VIAL_UNLOCK_COMBO_COLS {0, 3}
@@ -154,8 +151,10 @@
 /* --- Sentence Case 句首大写 --- */
 /* 检测到句号+空格后，下一个字母自动大写，打字体验优化 */
 
-// #define BNK16_PIN_SCAN  /* diagnostic: LED supply pin scanner, see bnk16.c */
 /* the USB port code overwrites the endpoint buffer, so press and release need a gap */
 #define TAP_CODE_DELAY 30
-/* diagnostic: types the state of all free pins over USB, to find the layer/mode/haptics switches (see bnk16.c) */
+
+/* Diagnostics (bnk16_diag.c), they type their results over USB:
+ * pin scan drives each free pin in turn, switch probe reports every pin state change. */
+// #define BNK16_PIN_SCAN
 // #define BNK16_SWITCH_PROBE

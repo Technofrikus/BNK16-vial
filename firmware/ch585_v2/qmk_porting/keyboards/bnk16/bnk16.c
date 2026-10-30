@@ -1,5 +1,6 @@
 /*
  * Binepad BNK16 board entry (based on the CH585 EVB entry)
+ * Pin map and open points: docs/bnk16/HARDWARE.md
  *
  * 模式状态机（参考量产键盘逻辑）：
  *   WIRED（有线模式）：USB 已连接，停止蓝牙广播，LED 亮2秒提示后熄灭
@@ -26,9 +27,8 @@
 #include "power_management.h"
 #include "battery.h"
 #include "led_indicator.h"
+#include "bnk16_diag.h"
 #include "CH58x_common.h"
-#include <string.h>
-#include <stdio.h>
 
 /* 有线模式激活标志 — 全局变量，供 ble_app.c 里的状态回调检查
  * 有线模式下，蓝牙状态变化不应覆盖 LED 状态
@@ -96,98 +96,6 @@ static void exit_wired_mode(void) {
  * 这里检测 USB 状态变化，触发模式切换
  * ======================================================================== */
 
-#ifdef BNK16_PIN_SCAN
-/* ========================================================================
- * Diagnostic build only: find the pin that switches the LED supply.
- * Starts automatically 20 s after boot. Every candidate pin is driven
- * high for 3 s, then low for 5 s, and its name is typed over USB in lower case without Shift or Enter ("a3h ", "b12l ").
- * Excluded: matrix, encoders, PA10 (LED data), PB8 (LED enable), USB, PB22.
- * ======================================================================== */
-static const struct { pin_t pin; const char *name; } scan_pins[] = {
-    { A0, "a0" },
-    { A1, "a1" },
-    { A2, "a2" },
-    { A3, "a3" },
-    { A4, "a4" },
-    { A5, "a5" },
-    { A6, "a6" },
-    { A7, "a7" },
-    { A8, "a8" },
-    { A9, "a9" },
-    { A11, "a11" },
-    { A12, "a12" },
-    { A13, "a13" },
-    { A14, "a14" },
-    { A15, "a15" },
-    { B9, "b9" },
-    { B12, "b12" },
-    { B13, "b13" },
-    { B18, "b18" },
-    { B19, "b19" },
-    { B23, "b23" }
-};
-#define SCAN_N (sizeof(scan_pins) / sizeof(scan_pins[0]))
-#define SCAN_STEP_MS 5000
-
-static int8_t   scan_idx   = -1;
-static uint8_t  scan_phase = 0;
-static uint32_t scan_t     = 0;
-
-/* Type without Enter and release everything afterwards, so no key can stay held and auto-repeat. */
-static void scan_type(const char *str) {
-    send_string_with_delay(str, 30);
-    wait_ms(30);
-    clear_keyboard();
-    wait_ms(30);
-    clear_keyboard();
-}
-
-static void scan_begin_phase(void) {
-    gpio_set_pin_output(scan_pins[scan_idx].pin);
-    gpio_write_pin(scan_pins[scan_idx].pin, scan_phase == 0);
-    scan_type(scan_pins[scan_idx].name);
-    scan_type(scan_phase == 0 ? "h " : "l ");
-    scan_t = timer_read32();
-}
-
-static void pin_scan_task(void) {
-    static bool started = false;
-
-    /* Starts by itself 20 s after boot (time to focus a text field); no key is involved,
-     * so no physical key can be held while the report is rewritten. */
-    if (!started && timer_read32() > 20000) {
-        started    = true;
-        scan_idx   = 0;
-        scan_phase = 0;
-        scan_type("start ");
-        scan_begin_phase();
-    }
-
-    if (scan_idx < 0 || timer_elapsed32(scan_t) < SCAN_STEP_MS) {
-        return;
-    }
-    if (scan_phase == 0) {
-        scan_phase = 1;
-    } else {
-        gpio_set_pin_input(scan_pins[scan_idx].pin);
-        scan_phase = 0;
-        if (++scan_idx >= (int8_t)SCAN_N) {
-            scan_idx = -1;
-            scan_type("end ");
-            return;
-        }
-    }
-    scan_begin_phase();
-}
-#endif
-
-#ifdef BNK16_ENCODER_DEBUG
-static void click_probe_task(void);
-#endif
-#ifdef BNK16_SWITCH_PROBE
-static void switch_probe_task(void);
-#endif
-
 /* 4-position layer switch: its two contacts are matrix (0,4) and (1,4) (column PB10, diodes to
  * rows PB3/PB2), measured: none = layer 0, (0,4) = 1, (1,4) = 2, both = 3. The keymap has KC_NO
  * there; the layer is only moved when the switch position changes, so MO()/TG() keys keep working
@@ -204,15 +112,7 @@ static void layer_switch_task(void) {
 
 void housekeeping_task_kb(void) {
     layer_switch_task();
-#ifdef BNK16_PIN_SCAN
-    pin_scan_task();
-#endif
-#ifdef BNK16_SWITCH_PROBE
-    switch_probe_task();
-#endif
-#ifdef BNK16_ENCODER_DEBUG
-    click_probe_task();
-#endif
+    bnk16_diag_task();
     /* 电源管理任务 — 检查无操作超时、低电量提醒 */
     power_task();
 
@@ -284,10 +184,7 @@ led_config_t g_led_config = {
  * also shows orange. The port's own rgb_matrix_indicators_advanced_kb() (extra_indicator.c) calls this hook. */
 bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     if (BNK16_STATUS_LED >= led_min && BNK16_STATUS_LED < led_max) {
-        if (!gpio_read_pin(B11)) {
-            /* temporary: BT/USB slide switch (PB11, pull-up) reads low -> white, to find its polarity */
-            rgb_matrix_set_color(BNK16_STATUS_LED, 30, 30, 30);
-        } else if (usb_is_connected()) {
+        if (usb_is_connected()) {
             rgb_matrix_set_color(BNK16_STATUS_LED, 0, 40, 0);
         } else if (ble_is_connected()) {
             rgb_matrix_set_color(BNK16_STATUS_LED, 0, 0, 40);
@@ -295,26 +192,6 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
             rgb_matrix_set_color(BNK16_STATUS_LED, 40, 16, 0);
         }
     }
-#ifdef BNK16_ENCODER_DEBUG
-    /* Raw encoder pin levels on the top two key rows (green = high, red = low):
-     * LED 0/1 = left A/B (PB14/PB15), LED 2/3 = right A/B (PB17/PB16), LED 4/5 = big A/B (PB8/PB9).
-     * Turning a knob must make its pair flicker; a pair that never changes points at the pins. */
-    static const pin_t enc_debug_pins[] = { B14, B15, B17, B16, B8, B9 };
-    for (uint8_t i = 0; i < sizeof(enc_debug_pins) / sizeof(enc_debug_pins[0]); i++) {
-        if (i >= led_min && i < led_max) {
-            if (gpio_read_pin(enc_debug_pins[i])) {
-                rgb_matrix_set_color(i, 0, 60, 0);
-            } else {
-                rgb_matrix_set_color(i, 60, 0, 0);
-            }
-        }
-    }
-    /* LED 8/9 = matrix (4,0)/(4,1) as QMK sees them (green = pressed), LED 10 = PB21 level between scans
-     * (red = something pulls PB21 low by itself, e.g. a click wired to GND instead of a column) */
-    if (8 >= led_min && 8 < led_max) rgb_matrix_set_color(8, matrix_is_on(4, 0) ? 0 : 20, matrix_is_on(4, 0) ? 60 : 0, 0);
-    if (9 >= led_min && 9 < led_max) rgb_matrix_set_color(9, matrix_is_on(4, 1) ? 0 : 20, matrix_is_on(4, 1) ? 60 : 0, 0);
-    if (10 >= led_min && 10 < led_max) rgb_matrix_set_color(10, gpio_read_pin(B21) ? 0 : 60, gpio_read_pin(B21) ? 60 : 0, 0);
-#endif
     return true;
 }
 #endif
@@ -335,245 +212,10 @@ static void bnk16_encoder_pins_prepare(void) {
      * UD+ pull-up off PB10/PB11 (USB runs on the HS port only, see usb_config.h) */
     R16_PIN_CONFIG &= ~(RB_PIN_USB_EN | RB_UDP_PU_EN);
     GPIOBDigitalCfg(ENABLE, GPIO_Pin_10 | GPIO_Pin_11);
-    /* PB11 = BT/USB slide switch (traced on the PCB; the switch also cuts battery +). Polarity unknown yet. */
+    /* PB11 = BT/USB slide switch (the switch also cuts battery +), low = BT position.
+     * Not evaluated yet: it becomes the mode input once Bluetooth is brought up. */
     gpio_set_pin_input_high(B11);
 }
-
-#ifdef BNK16_ENCODER_DEBUG
-/* ========================================================================
- * Diagnostic: find the pin the encoder clicks really connect to.
- * Every 100 ms, column 0 and 1 are each tested against every free pin, in both
- * directions (column low -> read pin, pin low -> read column), so the diode
- * direction does not matter. Hits are typed over USB, e.g. "c0>b20 " (column 0
- * pulled b20 low) or "b20>c0 " (b20 pulled column 0 low); "none " on release.
- * Excluded: matrix rows/cols, encoders, LED data/supply, USB, PB23 (reset).
- * ======================================================================== */
-static const pin_t bnk16_col_pins[MATRIX_COLS] = MATRIX_COL_PINS;
-static const struct { pin_t pin; const char *name; } click_probe_pins[] = {
-    { A0, "a0" }, { A1, "a1" }, { A2, "a2" }, { A3, "a3" }, { A4, "a4" }, { A5, "a5" }, { A6, "a6" },
-    { A7, "a7" }, { A8, "a8" }, { A9, "a9" }, { A12, "a12" }, { A13, "a13" }, { A14, "a14" }, { A15, "a15" },
-    { B18, "b18" }, { B19, "b19" }, { B20, "b20" }, { B22, "b22" },
-};
-
-static void click_probe_task(void) {
-    static uint32_t last = 0;
-    static char     reported[64] = "";
-    char            found[64]    = "";
-
-    if (timer_elapsed32(last) < 100) {
-        return;
-    }
-    last = timer_read32();
-
-    for (uint8_t c = 0; c < 2; c++) {
-        pin_t col = bnk16_col_pins[c];
-        for (uint8_t i = 0; i < sizeof(click_probe_pins) / sizeof(click_probe_pins[0]); i++) {
-            pin_t pin = click_probe_pins[i].pin;
-            bool  col_drives, pin_drives;
-
-            gpio_set_pin_input_high(pin);
-            gpio_set_pin_output(col);
-            gpio_write_pin_low(col);
-            wait_us(30);
-            col_drives = !gpio_read_pin(pin);
-            gpio_set_pin_input_high(col);
-            wait_us(30);
-
-            gpio_set_pin_output(pin);
-            gpio_write_pin_low(pin);
-            wait_us(30);
-            pin_drives = !gpio_read_pin(col);
-            gpio_set_pin_input_high(pin);
-            wait_us(30);
-
-            if ((col_drives || pin_drives) && strlen(found) + 12 < sizeof(found)) {
-                char entry[16];
-                if (col_drives) {
-                    snprintf(entry, sizeof(entry), "c%u>%s ", c, click_probe_pins[i].name);
-                } else {
-                    snprintf(entry, sizeof(entry), "%s>c%u ", click_probe_pins[i].name, c);
-                }
-                strcat(found, entry);
-            }
-        }
-    }
-
-    if (strcmp(found, reported) != 0) {
-        strcpy(reported, found);
-        send_string(found[0] ? found : "none ");
-        clear_keyboard();
-    }
-}
-#endif
-
-#ifdef BNK16_SWITCH_PROBE
-/* ========================================================================
- * Diagnostic: find the pins of the 4-position layer switch, the BLE/wired
- * switch and the haptics switch. Every 50 ms all free pins are checked:
- *   "a5l"     a5 reads low with its pull-up       (switched to GND)
- *   "a5h"     a5 reads high with its pull-down    (switched to VCC)
- *   "a5xb19"  driving one pin low pulls the other (switch between two pins,
- *             also against matrix rows/cols and encoder pins, any diode direction)
- *   "m42"     QMK matrix position (4,2) is on     (switch inside the matrix)
- *   "a6v78"   ADC value of a6 with its pull-up, 0-99 % of the ADC range (for a
- *             resistor ladder that never crosses the digital threshold); shown
- *             for pins tied high and for pins that moved away from their value
- *             at start, with 4 % hysteresis
- * Free pins are driven only when they are neither tied high nor low. Once the
- * result has been stable for 200 ms and differs from the last line, it is typed
- * over USB as one line: running number, then the tokens ("leer" if nothing).
- * Starts 5 s after boot with "start". Only lower case, digits, space, Enter.
- * Excluded: PA10/PA11 (LEDs), PB10-PB13 (USB FS/HS), PB23 (reset).
- * ======================================================================== */
-static const struct { pin_t pin; const char *name; } sp_pins[] = {
-    /* free pins: pull-up, pull-down, driven */
-    { A0, "a0" }, { A1, "a1" }, { A2, "a2" }, { A3, "a3" }, { A4, "a4" }, { A5, "a5" }, { A6, "a6" },
-    { A7, "a7" }, { A8, "a8" }, { A9, "a9" }, { A12, "a12" }, { A13, "a13" }, { A14, "a14" }, { A15, "a15" },
-    { B18, "b18" }, { B19, "b19" }, { B20, "b20" }, { B22, "b22" },
-    /* matrix rows: driven low like QMK's scan does */
-    { B3, "b3" }, { B2, "b2" }, { B0, "b0" }, { B1, "b1" }, { B21, "b21" },
-    /* matrix cols and encoder pins: only read */
-    { B5, "b5" }, { B4, "b4" }, { B6, "b6" }, { B7, "b7" },
-    { B14, "b14" }, { B15, "b15" }, { B17, "b17" }, { B16, "b16" }, { B8, "b8" }, { B9, "b9" },
-};
-#define SP_N       (sizeof(sp_pins) / sizeof(sp_pins[0]))
-#define SP_FREE    18
-#define SP_DRIVERS (SP_FREE + 5)
-#define SP_ADC     14 /* the first 14 free pins (PA0-PA9, PA12-PA15) are ADC inputs */
-static const uint8_t sp_adc_channel[SP_ADC] = { 9, 8, 7, 6, 0, 1, 10, 11, 12, 13, 2, 3, 4, 5 };
-static int8_t        sp_adc_start[SP_ADC];
-static int8_t        sp_adc_shown[SP_ADC];
-
-/* 0-99 % of the ADC range, pin keeps its pull-up */
-static int8_t switch_probe_adc(uint8_t i) {
-    uint32_t sum = 0;
-    ADC_ChannelCfg(sp_adc_channel[i]);
-    ADC_ExcutSingleConver();
-    for (uint8_t n = 0; n < 4; n++) {
-        sum += ADC_ExcutSingleConver();
-    }
-    return (int8_t)(sum * 100 / (4 * 4096));
-}
-
-static void switch_probe_sweep(char *buf, size_t size) {
-    uint32_t hi = 0, lo = 0;
-    uint64_t up = 0;
-    uint64_t pairs[SP_N];
-    size_t   len = 0;
-
-    buf[0] = '\0';
-    memset(pairs, 0, sizeof(pairs));
-
-    for (uint8_t i = 0; i < SP_FREE; i++) {
-        gpio_set_pin_input_low(sp_pins[i].pin);
-    }
-    wait_us(50);
-    for (uint8_t i = 0; i < SP_FREE; i++) {
-        if (gpio_read_pin(sp_pins[i].pin)) hi |= 1UL << i;
-        gpio_set_pin_input_high(sp_pins[i].pin);
-    }
-    wait_us(50);
-    for (uint8_t i = 0; i < SP_N; i++) {
-        if (gpio_read_pin(sp_pins[i].pin)) {
-            up |= 1ULL << i;
-        } else if (i < SP_FREE) {
-            lo |= 1UL << i;
-        }
-    }
-
-    for (uint8_t d = 0; d < SP_DRIVERS; d++) {
-        if (!(up & (1ULL << d)) || (d < SP_FREE && (hi & (1UL << d)))) {
-            continue;
-        }
-        gpio_set_pin_output(sp_pins[d].pin);
-        gpio_write_pin_low(sp_pins[d].pin);
-        wait_us(30);
-        for (uint8_t t = 0; t < SP_N; t++) {
-            if (t == d || !(up & (1ULL << t)) || (d >= SP_FREE && t >= SP_FREE)) {
-                continue;
-            }
-            if (!gpio_read_pin(sp_pins[t].pin)) {
-                pairs[d < t ? d : t] |= 1ULL << (d < t ? t : d);
-            }
-        }
-        gpio_set_pin_input_high(sp_pins[d].pin);
-        wait_us(30);
-    }
-
-    for (uint8_t i = 0; i < SP_FREE && len < size; i++) {
-        if (lo & (1UL << i)) len += snprintf(buf + len, size - len, "%sl ", sp_pins[i].name);
-        if (hi & (1UL << i) && len < size) len += snprintf(buf + len, size - len, "%sh ", sp_pins[i].name);
-    }
-    for (uint8_t i = 0; i < SP_N && len < size; i++) {
-        for (uint8_t j = i + 1; j < SP_N && len < size; j++) {
-            if (pairs[i] & (1ULL << j)) len += snprintf(buf + len, size - len, "%sx%s ", sp_pins[i].name, sp_pins[j].name);
-        }
-    }
-    for (uint8_t r = 0; r < MATRIX_ROWS && len < size; r++) {
-        for (uint8_t c = 0; c < MATRIX_COLS && len < size; c++) {
-            if (matrix_is_on(r, c)) len += snprintf(buf + len, size - len, "m%u%u ", r, c);
-        }
-    }
-
-    ADC_ExtSingleChSampInit(SampleFreq_4_or_2, ADC_PGA_1_4);
-    for (uint8_t i = 0; i < SP_ADC; i++) {
-        int8_t v = switch_probe_adc(i);
-        if (sp_adc_start[i] < 0) {
-            sp_adc_start[i] = sp_adc_shown[i] = v;
-        } else if (v - sp_adc_shown[i] >= 4 || sp_adc_shown[i] - v >= 4) {
-            sp_adc_shown[i] = v;
-        }
-        if (len < size && ((hi & (1UL << i)) || sp_adc_shown[i] != sp_adc_start[i])) {
-            len += snprintf(buf + len, size - len, "%sv%d ", sp_pins[i].name, sp_adc_shown[i]);
-        }
-    }
-    R8_ADC_CFG &= ~(RB_ADC_BUF_EN | RB_ADC_POWER_ON);
-}
-
-static void switch_probe_task(void) {
-    static bool     started  = false;
-    static uint32_t last     = 0;
-    static uint8_t  stable   = 0;
-    static uint16_t count    = 0;
-    static char     previous[200] = "";
-    static char     reported[200] = "";
-    char            current[200];
-    char            line[220];
-
-    if (!started) {
-        if (timer_read32() < 5000) {
-            return;
-        }
-        started = true;
-        GPIOADigitalCfg(ENABLE, GPIO_Pin_All & 0xFFFF);
-        GPIOBDigitalCfg(ENABLE, GPIO_Pin_18 | GPIO_Pin_19 | GPIO_Pin_20 | GPIO_Pin_22);
-        for (uint8_t i = 0; i < SP_FREE; i++) {
-            gpio_set_pin_input_high(sp_pins[i].pin);
-        }
-        memset(sp_adc_start, -1, sizeof(sp_adc_start));
-        send_string("start\n");
-        strcpy(reported, "-");
-    }
-
-    if (timer_elapsed32(last) < 50) {
-        return;
-    }
-    last = timer_read32();
-
-    switch_probe_sweep(current, sizeof(current));
-    if (strcmp(current, previous) != 0) {
-        strcpy(previous, current);
-        stable = 0;
-        return;
-    }
-    if (stable < 4 && ++stable == 4 && strcmp(current, reported) != 0) {
-        strcpy(reported, current);
-        snprintf(line, sizeof(line), "%u  %s\n", ++count, current[0] ? current : "leer");
-        send_string(line);
-        clear_keyboard();
-    }
-}
-#endif
 
 #ifdef ENCODER_ENABLE
 /* ========================================================================

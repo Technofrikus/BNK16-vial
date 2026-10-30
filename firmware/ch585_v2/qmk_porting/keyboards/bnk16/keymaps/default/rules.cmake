@@ -29,9 +29,9 @@ set(REPEAT_KEY_ENABLE ON CACHE BOOL "KB" FORCE)      # 重复键：按一下重�
 # 这些功能大多通过标准键码触发，Vial界面里不一定有专门配置页
 # ----------------------------------------------------------------------------
 
-# 小配列扩展类（对2x4极小配列很有用，建议后续开启）
+# 小配列扩展类
 set(ONESHOT_ENABLE ON CACHE BOOL "KB" FORCE)         # 一次性修饰键：按一下Ctrl粘到下一键，自动松开（小配列标配）
-set(LEADER_ENABLE OFF CACHE BOOL "KB" FORCE)         # 引导键：按Leader+序列触发功能（如L+B+T=切蓝牙），8键扩展出几十种功能（高阶，需记序列）
+set(LEADER_ENABLE OFF CACHE BOOL "KB" FORCE)         # 引导键：按Leader+序列触发功能（如L+B+T=切蓝牙）
 
 # 打字体验类（自动行为，开了就一直生效）
 set(AUTO_SHIFT_ENABLE OFF CACHE BOOL "KB" FORCE)     # 自动换挡：长按字母键自动输出大写（可省Shift键）（有争议，改变输入习惯）

@@ -75,6 +75,11 @@
       "name": "FACTORY_RESET",
       "title": "Factory Reset (long press 5s)",
       "shortName": "Reset"
+    },
+    {
+      "name": "MOBILE_MODE",
+      "title": "Mobile Mode (long press 3s)",
+      "shortName": "Mobile"
     }
   ]
 }

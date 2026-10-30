@@ -1,7 +1,6 @@
 /*
- * CH585 EVB 默认键位（2x4，常规矩阵扫描，杜邦线短接测试）
- * 层 0：qwer / asd + MO(_FN)
- * 层 1：FN（功能键，后续在 Vial 里自定义）
+ * BNK16 default keymap: numpad on layer 0, layers 1-3 transparent (selected by the 4-position switch).
+ * The last two LAYOUT entries are the layer switch contacts and must stay KC_NO.
  *
  * 自定义按键码（Vial User Keycodes）：
  *   BT_1 / BT_2 / BT_3 — 短按切换设备，长按3秒配对设备

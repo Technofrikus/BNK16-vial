@@ -101,20 +101,15 @@ void hid_keyboard_send_last_bios_report()
 }
 
 /* Mouse, system control and consumer (media) reports share interface 1 / EP2; data[0] is the report ID. */
-static bool usbhs_send_extra(uint8_t *data, uint8_t len)
-{
-    return usbhs_send(DEF_UEP2, data, len);
-}
-
 bool hid_exkey_send_report(uint8_t *data, uint8_t len)
 {
 #if (USB_PORT_CONFIG == USB_PORT_HIGH_SPEED)
-    return usbhs_send_extra(data, len);
+    return usbhs_send(DEF_UEP2, data, len);
 #elif (USB_PORT_CONFIG == USB_PORT_FULL_SPEED)
     usbfs_wait_ep_free(&R8_UEP2_CTRL);
     return USBFS_SendExtraReport(data, len);
 #elif (USB_PORT_CONFIG == USB_PORT_DUAL_BOTH)
-    bool hs = usbhs_send_extra(data, len);
+    bool hs = usbhs_send(DEF_UEP2, data, len);
     usbfs_wait_ep_free(&R8_UEP2_CTRL);
     bool fs = USBFS_SendExtraReport(data, len);
     return hs || fs;

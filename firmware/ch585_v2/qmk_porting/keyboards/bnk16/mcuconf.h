@@ -1,11 +1,10 @@
 /*
- * CH585 EVB 平台配置
+ * BNK16 platform config (same values as the CH585 EVB)
  */
 
 #pragma once
 
-/* 无串口排查方案：DEBUG 保持关闭，启动阶段由板载 LED(PB15) 闪烁报障，
- * 不依赖 USB-TTL 模块。需要串口日志时再改为 Debug_UART1(TX=PA9)。 */
+/* Serial log off; for logging enable Debug_UART1 (TX = PA9, not verified on the BNK16) */
 // #define DEBUG                Debug_UART1
 #define DEBUG_BAUDRATE       460800
 #define DCDC_ENABLE          1

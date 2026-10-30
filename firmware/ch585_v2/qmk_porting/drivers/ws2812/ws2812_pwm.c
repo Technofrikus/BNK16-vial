@@ -44,9 +44,8 @@ static volatile bool ws2812_frame_busy = false; /**< true from flush until the D
     } while (R8_SLP_CLK_OFF0 & RB_SLP_CLK_TMR1);
 
 /* Single-shot DMA: the frame goes out exactly once. Afterwards the timer keeps running with the
- * last (zero duty, reset) value, so the data line stays low. The old loop-DMA + clock gating in this
- * ISR could freeze the timer mid-bit when the interrupt came late, which garbled the next frame.
- * Each frame restarts the timer from zero (ws2812_start_frame), see there. */
+ * last (zero duty, reset) value, so the data line stays low. Gating the timer clock here instead
+ * could freeze it mid-bit when the interrupt comes late and garble the next frame. */
 __INTERRUPT __HIGH_CODE void TMR1_IRQHandler()
 {
     R8_TMR1_INTER_EN = 0;
@@ -292,10 +291,9 @@ write/read to/from the other buffer).
 
 /*
  * Start sending the frame buffer. The timer is stopped and cleared first and only started once the
- * DMA is set up, so every frame begins at the start of a timer period. Previously the DMA was
- * restarted while the timer kept running: when that hit the wrong moment of a period, the first data
- * bit got no pulse, the whole frame shifted one bit to the left and every LED briefly showed about
- * twice its brightness. The zero-duty lead-in periods cover whatever the first period does.
+ * DMA is set up, so every frame begins at the start of a timer period. Restarting the DMA on a
+ * running timer can cost the first data bit its pulse: the frame then shifts one bit left and every
+ * LED flashes at about twice its brightness. The zero-duty lead-in covers the first period.
  */
 static void ws2812_start_frame(void)
 {

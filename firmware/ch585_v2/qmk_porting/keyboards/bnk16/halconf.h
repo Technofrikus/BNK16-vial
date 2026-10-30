@@ -1,5 +1,5 @@
 /*
- * CH585 EVB 引脚复用配置（M2 有线：不用 UART/I2C/SPI 重映射）
+ * BNK16 pin remapping: none used
  */
 
 #pragma once
@@ -14,7 +14,7 @@
 // #define UART2_IO_REMAPPING
 
 // RB_PIN_UART3  -  UART3: PA4/PA5 ->  PB20/PB21
-// 注意：PA4 在本板用作矩阵列，勿开 UART3 重映射冲突
+// PB21 is matrix row 4 here, keep this off
 // #define UART3_IO_REMAPPING
 
 /* I2C_IO_REMAPPING    -  I2C: PB13/PB12 -> PB21/PB20 */
