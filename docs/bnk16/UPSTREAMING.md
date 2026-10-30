@@ -58,10 +58,10 @@ Build the EVB target on the branch before opening the PR, because `bnk16` does n
 
 | # | Topic | Files | Before sending |
 |---|---|---|---|
-| 1 | WS2812 PWM driver: current QMK API, single-shot DMA, clean frame start | `qmk_porting/drivers/ws2812/ws2812_pwm.c`, `drivers/led` include in `common_features.cmake` | The TMR2 branch is untested. `WS2812_DI_HIGH_DRIVE` assumes port A |
+| 1 | WS2812 PWM driver: current QMK API, single-shot DMA, clean frame start. Branch `feat/ws2812-pwm-driver` | `qmk_porting/drivers/ws2812/ws2812_pwm.c`, `drivers/led` include and `process_underglow.c` in `common_features.cmake` | Pushed to `fork`, no PR yet. The TMR2 branch is untested. `WS2812_DI_HIGH_DRIVE` assumes port A |
 | 2 | USB: 1 ms keyboard polling, wait for a free endpoint, working media keys and mouse | `qmk_porting/protocol/usb_interface.c`, `user/usb/usb_desc.c`, `usb_desc.h`, `ch585_usbfs_device.c`, `ch585_usbfs_device.h` | Only the HS path is tested. The BNK16 has no FS connector, so test FS on the EVB |
 | 3 | Per-board USB port selection | `user/usb/usb_config.h` | Default stays dual port, EVB build checked |
-| 4 | VialRGB and missing RGB source in the build | `qmk_porting/common_features.cmake` (rest of the file) | |
+| 4 | `VIALRGB_ENABLE` build option. Branch `feat/vialrgb` | `qmk_porting/common_features.cmake` (rest of the file) | Pushed to `fork`, no PR yet. Applies on its own, but a board with RGB needs 1 to work |
 | 5 | Report the real USB state to QMK | New, currently a workaround in `bnk16.c` (`usb_is_connected`) | The port never calls `usb_device_state_set_configuration()`, so its suspend handling never runs. Fix it in the port, then drop the workaround |
 | 6 | BNK16 board target | `qmk_porting/keyboards/bnk16/`, `build-bnk16.sh` | See below. Depends on 1-4 |
 
