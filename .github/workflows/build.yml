@@ -11,7 +11,7 @@ on:
 env:
   DOCKER_IMAGE: nookcraftlab/riscv:latest
   FIRMWARE_PATH: firmware/ch585_v2
-  FIRMWARE_NAME: ch585_evb
+  FIRMWARE_NAME: bnk16
 
 jobs:
   build:
@@ -38,24 +38,24 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             ${{ env.DOCKER_IMAGE }} \
-            bash /workspace/${{ env.FIRMWARE_PATH }}/build.sh
+            bash /workspace/${{ env.FIRMWARE_PATH }}/build-bnk16.sh
 
       - name: Verify build output
         run: |
-          if [ ! -f "${{ env.FIRMWARE_PATH }}/build/${{ env.FIRMWARE_NAME }}.hex" ]; then
+          if [ ! -f "${{ env.FIRMWARE_PATH }}/build-bnk16/${{ env.FIRMWARE_NAME }}.hex" ]; then
             echo "Error: Firmware file not found!"
             exit 1
           fi
-          ls -lh "${{ env.FIRMWARE_PATH }}/build/"
+          ls -lh "${{ env.FIRMWARE_PATH }}/build-bnk16/"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.FIRMWARE_NAME }}-${{ steps.version.outputs.version }}
           path: |
-            ${{ env.FIRMWARE_PATH }}/build/${{ env.FIRMWARE_NAME }}.hex
-            ${{ env.FIRMWARE_PATH }}/build/${{ env.FIRMWARE_NAME }}.bin
-            ${{ env.FIRMWARE_PATH }}/build/${{ env.FIRMWARE_NAME }}.elf
+            ${{ env.FIRMWARE_PATH }}/build-bnk16/${{ env.FIRMWARE_NAME }}.hex
+            ${{ env.FIRMWARE_PATH }}/build-bnk16/${{ env.FIRMWARE_NAME }}.bin
+            ${{ env.FIRMWARE_PATH }}/build-bnk16/${{ env.FIRMWARE_NAME }}.elf
           retention-days: 30
 
       - name: Upload to Release
@@ -63,7 +63,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ${{ env.FIRMWARE_PATH }}/build/${{ env.FIRMWARE_NAME }}.hex
-            ${{ env.FIRMWARE_PATH }}/build/${{ env.FIRMWARE_NAME }}.bin
+            ${{ env.FIRMWARE_PATH }}/build-bnk16/${{ env.FIRMWARE_NAME }}.hex
+            ${{ env.FIRMWARE_PATH }}/build-bnk16/${{ env.FIRMWARE_NAME }}.bin
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
