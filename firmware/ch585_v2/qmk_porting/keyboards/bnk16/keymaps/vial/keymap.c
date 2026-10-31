@@ -1,5 +1,6 @@
 /*
- * BNK16 Vial keymap: numpad on layer 0, layers 1-3 transparent (selected by the 4-position switch).
+ * BNK16 Vial keymap: numpad on layer 0, layers 1-3 empty (selected by the 4-position switch). Their keys
+ * are KC_NO, so they stay dark until assigned; encoder clicks and rotation stay transparent.
  *
  * Custom keycodes (same order as customKeycodes in vial.json):
  *   BT_1 / BT_2 / BT_3  tap: switch to that device, hold 3 s: pair it
@@ -12,6 +13,7 @@
  *   HAPTIC_BRAKE        brake pulse after the burst on/off
  *   KNOB_RES_DOWN/UP    big knob resolution (key presses and haptic bursts per turn: 80 / steps per key, 1-8)
  *   HAPTIC_RESET        all haptic settings and the knob resolution back to the defaults
+ *   LED_MASK            light unassigned keys too / keep them dark (default)
  */
 
 #include QMK_KEYBOARD_H
@@ -35,14 +37,15 @@ enum custom_keycodes {
     KNOB_RES_DOWN,
     KNOB_RES_UP,
     HAPTIC_RESET,
+    LED_MASK,
 };
 
 // clang-format off
-#define TRANSPARENT_LAYER LAYOUT( \
-    KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS, \
-    KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS, \
-    KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS, \
-    KC_TRNS, KC_TRNS, KC_TRNS, KC_TRNS, \
+#define EMPTY_LAYER LAYOUT( \
+    KC_NO,   KC_NO,   KC_NO,   KC_NO,   \
+    KC_NO,   KC_NO,   KC_NO,   KC_NO,   \
+    KC_NO,   KC_NO,   KC_NO,   KC_NO,   \
+    KC_NO,   KC_NO,   KC_NO,   KC_NO,   \
     KC_TRNS, KC_TRNS                    \
 )
 
@@ -54,9 +57,9 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         KC_P0,   KC_PDOT, KC_PENT, KC_PPLS,
         KC_MPLY, KC_MFFD
     ),
-    [1] = TRANSPARENT_LAYER,
-    [2] = TRANSPARENT_LAYER,
-    [3] = TRANSPARENT_LAYER,
+    [1] = EMPTY_LAYER,
+    [2] = EMPTY_LAYER,
+    [3] = EMPTY_LAYER,
 };
 
 #if defined(ENCODER_MAP_ENABLE)
@@ -105,6 +108,7 @@ static uint32_t hold_time_of(uint16_t keycode) {
 static void toggle_mobile_mode(void) {
     mobile_mode_active = !mobile_mode_active;
     power_set_mobile_mode(mobile_mode_active);
+    bnk16_status_mobile_mode(mobile_mode_active);
     if (mobile_mode_active) {
         ble_set_conn_interval_raw(MOBILE_CONN_INTERVAL);
     } else {
@@ -132,18 +136,33 @@ bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up) {
     return keycode == knob_key || keycode == 0x7E00 + (knob_key - BT_1);
 }
 
+/* Device number 1-3 of a BT key, 0 for any other key */
+uint8_t bnk16_keycode_bt_device(uint16_t keycode) {
+    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= BT_3 - BT_1) {
+        return (keycode & 0xFF) + 1;
+    }
+    return keycode >= BT_1 && keycode <= BT_3 ? device_of(keycode) : 0;
+}
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         power_notify_activity();
     }
 
     /* Vial stores its custom keycodes as 0x7E00 + index */
-    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= HAPTIC_RESET - BT_1) {
+    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= LED_MASK - BT_1) {
         keycode = BT_1 + (keycode & 0xFF);
     }
 
     /* mobile mode locks the keyboard, only its own key still works */
     if (mobile_mode_active && keycode != MOBILE_MODE) {
+        return false;
+    }
+
+    if (keycode == LED_MASK) {
+        if (record->event.pressed) {
+            bnk16_toggle_show_unassigned();
+        }
         return false;
     }
 

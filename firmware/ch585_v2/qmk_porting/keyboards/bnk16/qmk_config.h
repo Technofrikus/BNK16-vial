@@ -64,6 +64,7 @@
 #define RGB_MATRIX_DEFAULT_VAL 96
 #define RGB_MATRIX_DEFAULT_MODE RGB_MATRIX_CYCLE_LEFT_RIGHT
 #define RGB_MATRIX_KEYPRESSES
+#define RGB_MATRIX_SLEEP /* makes rgb_matrix_set_suspend_state() work, used while the board sleeps on battery */
 #define ENABLE_RGB_MATRIX_SOLID_COLOR
 #define ENABLE_RGB_MATRIX_BREATHING
 #define ENABLE_RGB_MATRIX_BAND_SAT

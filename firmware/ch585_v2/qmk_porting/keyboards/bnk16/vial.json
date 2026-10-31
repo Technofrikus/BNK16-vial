@@ -130,6 +130,11 @@
       "name": "HAPTIC_RESET",
       "title": "Haptics and Big Knob Reset to Defaults",
       "shortName": "HptRs"
+    },
+    {
+      "name": "LED_MASK",
+      "title": "LEDs: Light Unassigned Keys On/Off",
+      "shortName": "LedMsk"
     }
   ]
 }

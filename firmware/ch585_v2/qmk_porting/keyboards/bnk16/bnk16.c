@@ -97,6 +97,11 @@ static void layer_switch_task(void) {
  * Housekeeping (called from QMK's main loop)
  * ======================================================================== */
 
+#ifdef RGB_MATRIX_ENABLE
+static void status_led_task(void);
+static void leds_off_task(void);
+#endif
+
 void housekeeping_task_kb(void) {
     layer_switch_task();
     bnk16_diag_task();
@@ -108,13 +113,18 @@ void housekeeping_task_kb(void) {
     }
 
     usb_mode_task();
+
+#ifdef RGB_MATRIX_ENABLE
+    status_led_task();
+    leds_off_task();
+#endif
 }
 
 #ifdef RGB_MATRIX_ENABLE
 /* ========================================================================
  * RGB matrix: LEDs 0-15 are the keys (row-major, matrix row * 4 + col),
  * LED BNK16_STATUS_LED is the extra status LED. It has no flags, so no
- * effect touches it; it is driven only from the indicator callback below.
+ * effect touches it; it is driven only by the code below.
  * Encoder clicks (matrix row 4) have no LED.
  * ======================================================================== */
 led_config_t g_led_config = {
@@ -141,46 +151,265 @@ led_config_t g_led_config = {
     }
 };
 
-/* Status LED: green = USB enumerated by a host, blue = BLE connected, dim orange = otherwise.
- * Shows the real USB state, not wired_mode_active: that flag is the remembered mode and stays set
- * on battery after a boot that restored wired mode. There is no VBUS pin, so a charger-only supply
- * also shows orange. The port's own rgb_matrix_indicators_advanced_kb() (extra_indicator.c) calls this hook. */
-bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
-    if (BNK16_STATUS_LED >= led_min && BNK16_STATUS_LED < led_max) {
-        if (usb_is_connected()) {
-            rgb_matrix_set_color(BNK16_STATUS_LED, 0, 40, 0);
-        } else if (ble_is_connected()) {
-            rgb_matrix_set_color(BNK16_STATUS_LED, 0, 0, 40);
-        } else {
-            rgb_matrix_set_color(BNK16_STATUS_LED, 40, 16, 0);
+#define BNK16_KEY_LED_COUNT 16
+
+/* Full scale colours, set_led_scaled() applies the Vial brightness */
+static const rgb_t COLOR_OFF   = {.r = 0, .g = 0, .b = 0};
+static const rgb_t COLOR_WHITE = {.r = 255, .g = 255, .b = 255};
+static const rgb_t COLOR_RED   = {.r = 255, .g = 0, .b = 0};
+static const rgb_t COLOR_GREEN = {.r = 0, .g = 255, .b = 0};
+static const rgb_t COLOR_BLUE  = {.r = 0, .g = 0, .b = 255};
+
+static const rgb_t layer_colors[] = {
+    {.r = 255, .g = 255, .b = 255}, /* white */
+    {.r = 150, .g = 0, .b = 255},   /* purple */
+    {.r = 255, .g = 100, .b = 0},   /* orange */
+    {.r = 0, .g = 255, .b = 0},     /* green */
+};
+
+#define STATUS_BATTERY_ON_MS    10000 /* on battery the layer colour goes off after this */
+#define STATUS_CONNECTED_MS     2000
+#define STATUS_FLASH_FAILED_MS  600   /* one period of the red flashes */
+#define STATUS_FLASH_FAILED_N   3
+#define STATUS_FLASH_MOBILE_MS  400   /* one period of the white flashes */
+#define BLINK_PAIRING_MS        500
+#define BLINK_SEARCHING_MS      1000
+#define LEDS_OFF_REFRESH_MS     50
+#define LEDS_OFF_SETTLE_TICKS   10    /* frames sent regardless of changes after QMK blanked the LEDs */
+
+typedef enum {
+    STATUS_MSG_NONE,
+    STATUS_MSG_FAILED,
+    STATUS_MSG_CONNECTED,
+    STATUS_MSG_MOBILE,
+} status_msg_t;
+
+static status_msg_t status_msg;
+static uint8_t      status_msg_flashes;
+static uint32_t     status_msg_start;
+static uint32_t     status_layer_start;
+
+static void status_msg_show(status_msg_t msg, uint8_t flashes) {
+    status_msg         = msg;
+    status_msg_flashes = flashes;
+    status_msg_start   = timer_read32();
+}
+
+/* Called by the mobile mode key: 2 flashes = on, 1 = off */
+void bnk16_status_mobile_mode(bool on) {
+    status_msg_show(STATUS_MSG_MOBILE, on ? 2 : 1);
+}
+
+static inline bool blink_on(uint16_t period_ms) {
+    return timer_read32() % period_ms < period_ms / 2;
+}
+
+static bool ble_is_pairing(void) {
+    return ble_get_state() == BLE_STATE_PAIRING;
+}
+
+/* Looking for a host, but not in pairing mode */
+static bool ble_is_searching(void) {
+    switch (ble_get_state()) {
+        case BLE_STATE_ADVERTISING:
+        case BLE_STATE_RECONNECTING:
+        case BLE_STATE_CONNECTING:
+        case BLE_STATE_SWITCHING:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Follows the states that start or end something on the status LED and handles sleep. Timing starts
+ * here, the colour itself is chosen in status_led_color(). */
+static void status_led_task(void) {
+    static uint8_t last_layer    = 0xFF;
+    static bool    last_sleeping = false;
+    static bool    last_usb      = false;
+    static bool    ble_waiting   = false; /* pairing or searching, no result shown yet */
+
+    uint8_t layer    = get_highest_layer(layer_state | default_layer_state);
+    bool    sleeping = power_get_state() == POWER_STATE_SLEEPING;
+    bool    usb      = usb_is_connected();
+
+    if (sleeping != last_sleeping) {
+        rgb_matrix_set_suspend_state(sleeping);
+    }
+    if (layer != last_layer || usb != last_usb || (last_sleeping && !sleeping)) {
+        status_layer_start = timer_read32();
+    }
+    last_layer    = layer;
+    last_sleeping = sleeping;
+    last_usb      = usb;
+
+    if (ble_is_pairing() || ble_is_searching()) {
+        ble_waiting        = true;
+        status_layer_start = timer_read32();
+    } else if (ble_waiting) {
+        ble_waiting = false;
+        if (ble_is_connected()) {
+            status_msg_show(STATUS_MSG_CONNECTED, 0);
+        } else if (!wired_mode_active) {
+            status_msg_show(STATUS_MSG_FAILED, STATUS_FLASH_FAILED_N);
         }
     }
+
+    if (status_msg != STATUS_MSG_NONE) {
+        uint32_t duration = STATUS_CONNECTED_MS;
+        if (status_msg == STATUS_MSG_FAILED) {
+            duration = STATUS_FLASH_FAILED_MS * status_msg_flashes;
+        } else if (status_msg == STATUS_MSG_MOBILE) {
+            duration = STATUS_FLASH_MOBILE_MS * status_msg_flashes;
+        }
+        if (timer_elapsed32(status_msg_start) >= duration) {
+            status_msg         = STATUS_MSG_NONE;
+            status_layer_start = timer_read32();
+        }
+    }
+}
+
+/* Highest priority first: pairing, searching, result and mobile mode messages, layer colour */
+static rgb_t status_led_color(void) {
+    if (ble_is_pairing()) {
+        return blink_on(BLINK_PAIRING_MS) ? COLOR_BLUE : COLOR_OFF;
+    }
+    if (ble_is_searching()) {
+        return blink_on(BLINK_SEARCHING_MS) ? COLOR_BLUE : COLOR_OFF;
+    }
+    uint32_t elapsed = timer_elapsed32(status_msg_start);
+    switch (status_msg) {
+        case STATUS_MSG_FAILED:
+            return elapsed % STATUS_FLASH_FAILED_MS < STATUS_FLASH_FAILED_MS / 2 ? COLOR_RED : COLOR_OFF;
+        case STATUS_MSG_CONNECTED:
+            return COLOR_BLUE;
+        case STATUS_MSG_MOBILE:
+            return elapsed % STATUS_FLASH_MOBILE_MS < STATUS_FLASH_MOBILE_MS / 2 ? COLOR_WHITE : COLOR_OFF;
+        default:
+            break;
+    }
+    /* no VBUS pin: a plain charger or a host in standby counts as battery here */
+    if (!usb_is_connected() && timer_elapsed32(status_layer_start) >= STATUS_BATTERY_ON_MS) {
+        return COLOR_OFF;
+    }
+    uint8_t layer = get_highest_layer(layer_state | default_layer_state);
+    return layer < ARRAY_SIZE(layer_colors) ? layer_colors[layer] : COLOR_OFF;
+}
+
+/* The one place for keys with a colour of their own. These stay lit when the LEDs are deactivated in Vial. */
+static bool key_color(uint16_t keycode, rgb_t *color) {
     /* the key that toggles the haptic brake shows its state: red = on, green = off */
-    for (uint8_t row = 0; row < 4; row++) {
-        for (uint8_t col = 0; col < 4; col++) {
-            uint8_t led = row * 4 + col;
-            if (led < led_min || led >= led_max) {
-                continue;
+    if (bnk16_keycode_is_haptic_brake(keycode)) {
+        *color = bnk16_haptic_brake_on() ? COLOR_RED : COLOR_GREEN;
+        return true;
+    }
+    /* the knob resolution keys go from green to red as they near the end of their range */
+    bool up = bnk16_keycode_is_knob_res(keycode, true);
+    if (up || bnk16_keycode_is_knob_res(keycode, false)) {
+        uint8_t range = BNK16_BIG_STEPS_PER_KEY_MAX - 1;
+        uint8_t left  = up ? bnk16_knob_steps() - 1 : BNK16_BIG_STEPS_PER_KEY_MAX - bnk16_knob_steps();
+        color->r      = 255 * (range - left) / range;
+        color->g      = 255 * left / range;
+        color->b      = 0;
+        return true;
+    }
+    /* the key of the selected Bluetooth device shows its connection */
+    uint8_t device = bnk16_keycode_bt_device(keycode);
+    if (device != 0) {
+        uint8_t current;
+        ble_load_mode(NULL, &current);
+        if (device == current) {
+            if (ble_is_connected()) {
+                *color = COLOR_BLUE;
+                return true;
             }
-            keypos_t pos = {.row = row, .col = col};
-            if (bnk16_keycode_is_haptic_brake(keymap_key_to_keycode(layer_switch_get_layer(pos), pos))) {
-                if (bnk16_haptic_brake_on()) {
-                    rgb_matrix_set_color(led, 110, 0, 0);
-                } else {
-                    rgb_matrix_set_color(led, 0, 110, 0);
-                }
+            if (ble_is_pairing()) {
+                *color = blink_on(BLINK_PAIRING_MS) ? COLOR_BLUE : COLOR_OFF;
+                return true;
             }
-            /* the knob resolution keys go from green to red as they near the end of their range */
-            uint16_t keycode = keymap_key_to_keycode(layer_switch_get_layer(pos), pos);
-            bool     up      = bnk16_keycode_is_knob_res(keycode, true);
-            if (up || bnk16_keycode_is_knob_res(keycode, false)) {
-                uint8_t range = BNK16_BIG_STEPS_PER_KEY_MAX - 1;
-                uint8_t left  = up ? bnk16_knob_steps() - 1 : BNK16_BIG_STEPS_PER_KEY_MAX - bnk16_knob_steps();
-                rgb_matrix_set_color(led, 110 * (range - left) / range, 110 * left / range, 0);
+            if (ble_is_searching()) {
+                *color = blink_on(BLINK_SEARCHING_MS) ? COLOR_BLUE : COLOR_OFF;
+                return true;
             }
+        }
+    }
+    return false;
+}
+
+static inline rgb_t scale_to_brightness(rgb_t color) {
+    uint8_t val = rgb_matrix_get_val();
+    color.r     = color.r * val / 255;
+    color.g     = color.g * val / 255;
+    color.b     = color.b * val / 255;
+    return color;
+}
+
+static inline uint16_t active_keycode_of_led(uint8_t led) {
+    keypos_t pos = {.row = led / 4, .col = led % 4};
+    return keymap_key_to_keycode(layer_switch_get_layer(pos), pos);
+}
+
+/* Runs after the effect wrote its frame: a key's own colour replaces the effect, unassigned keys go
+ * dark, all others keep the effect. KC_TRNS resolves to the layer below, so it counts as assigned
+ * if that key is. The port's own rgb_matrix_indicators_advanced_kb() (extra_indicator.c) calls this hook. */
+bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
+    if (BNK16_STATUS_LED >= led_min && BNK16_STATUS_LED < led_max) {
+        rgb_t color = scale_to_brightness(status_led_color());
+        rgb_matrix_set_color(BNK16_STATUS_LED, color.r, color.g, color.b);
+    }
+    for (uint8_t led = led_min; led < led_max && led < BNK16_KEY_LED_COUNT; led++) {
+        uint16_t keycode = active_keycode_of_led(led);
+        rgb_t    color;
+        if (key_color(keycode, &color)) {
+            color = scale_to_brightness(color);
+            rgb_matrix_set_color(led, color.r, color.g, color.b);
+        } else if (keycode == KC_NO && !bnk16_show_unassigned()) {
+            rgb_matrix_set_color(led, 0, 0, 0);
         }
     }
     return true;
+}
+
+/* QMK skips the indicator hook while the LEDs are deactivated in Vial and only blanks them once, so the
+ * special keys and the status LED are drawn here. Frames are only sent on a change. QMK's blank frame
+ * can arrive after ours, hence the few unconditional frames at the start. Not while sleeping: QMK keeps
+ * everything dark then. */
+static void leds_off_task(void) {
+    static uint32_t last_time;
+    static uint8_t  settle_ticks = LEDS_OFF_SETTLE_TICKS;
+    static rgb_t    last[RGB_MATRIX_LED_COUNT];
+
+    if (timer_elapsed32(last_time) < LEDS_OFF_REFRESH_MS) {
+        return;
+    }
+    last_time = timer_read32();
+
+    if (power_get_state() == POWER_STATE_SLEEPING || (rgb_matrix_is_enabled() && rgb_matrix_get_mode() != RGB_MATRIX_NONE)) {
+        settle_ticks = LEDS_OFF_SETTLE_TICKS;
+        return;
+    }
+
+    bool changed = settle_ticks > 0;
+    if (settle_ticks > 0) {
+        settle_ticks--;
+    }
+    for (uint8_t led = 0; led < RGB_MATRIX_LED_COUNT; led++) {
+        rgb_t color = COLOR_OFF;
+        if (led == BNK16_STATUS_LED) {
+            color = status_led_color();
+        } else if (led < BNK16_KEY_LED_COUNT && !key_color(active_keycode_of_led(led), &color)) {
+            color = COLOR_OFF;
+        }
+        color = scale_to_brightness(color);
+        if (color.r != last[led].r || color.g != last[led].g || color.b != last[led].b) {
+            last[led] = color;
+            changed   = true;
+        }
+        rgb_matrix_set_color(led, color.r, color.g, color.b);
+    }
+    if (changed) {
+        rgb_matrix_update_pwm_buffers();
+    }
 }
 #endif
 
@@ -199,7 +428,8 @@ typedef union {
         uint32_t pulses : 5;
         uint32_t knob_steps : 4; /* big knob steps per key press and burst */
         uint32_t brake : 1;
-        uint32_t unused : 5;
+        uint32_t show_unassigned : 1; /* LED setting kept in this word: 0 = unassigned keys stay dark */
+        uint32_t unused : 4;
         uint32_t magic : 8;
     };
 } haptic_config_t;
@@ -277,8 +507,19 @@ static void haptic_save_and_buzz(void) {
 
 /* Called by the custom keycodes in keymap.c; every change gives a sample burst */
 void bnk16_haptic_reset(void) {
+    bool show_unassigned = haptic_config.show_unassigned;
     haptic_set_defaults();
+    haptic_config.show_unassigned = show_unassigned;
     haptic_save_and_buzz();
+}
+
+void bnk16_toggle_show_unassigned(void) {
+    haptic_config.show_unassigned = !haptic_config.show_unassigned;
+    eeconfig_update_kb(haptic_config.raw);
+}
+
+bool bnk16_show_unassigned(void) {
+    return haptic_config.show_unassigned;
 }
 
 void bnk16_haptic_toggle_brake(void) {
