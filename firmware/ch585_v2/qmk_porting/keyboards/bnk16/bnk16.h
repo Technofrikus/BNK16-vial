@@ -27,3 +27,14 @@
 
 /* Switch to wired mode: stops BLE and remembers the mode (bnk16.c) */
 void enter_wired_mode(void);
+
+/* Haptic and big knob settings, used by the custom keycodes in keymap.c */
+void bnk16_haptic_reset(void);
+void bnk16_haptic_change_freq(bool up);
+void bnk16_haptic_change_length(bool up);
+void bnk16_knob_change_resolution(bool up);
+void bnk16_haptic_toggle_brake(void);
+bool bnk16_haptic_brake_on(void);
+bool bnk16_keycode_is_haptic_brake(uint16_t keycode);
+uint8_t bnk16_knob_steps(void);
+bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up);

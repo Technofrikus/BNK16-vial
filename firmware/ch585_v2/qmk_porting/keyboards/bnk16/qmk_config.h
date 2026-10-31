@@ -1,16 +1,19 @@
 /*
  * Binepad BNK16 board config.
  * Matrix, encoder, LED and layer switch pins are measured on the board, see docs/bnk16/HARDWARE.md.
- * VBUS, charger, battery and haptics pins are unknown and unused here.
+ * VBUS, charger and battery pins are unknown and unused here.
  */
 #pragma once
 
-/* USB Device descriptor parameter (pid.codes test PID, private use) */
-#define VENDOR_ID    0x1209
-#define PRODUCT_ID   0x0001
+/* USB Device descriptor parameter. Self-chosen, not registered with the USB-IF: private use only.
+ * VID = "VP" in ASCII. Vial shows the manufacturer and product strings, see the _UTF16 lists. */
+#define VENDOR_ID    0x5650
+#define PRODUCT_ID   0x0B16
 #define DEVICE_VER   0x0001
-#define MANUFACTURER BNK16Vial
+#define MANUFACTURER Vialpad
 #define PRODUCT      BNK16
+#define MANUFACTURER_UTF16 'V', 0, 'i', 0, 'a', 0, 'l', 0, 'p', 0, 'a', 0, 'd', 0
+#define PRODUCT_UTF16      'B', 0, 'N', 0, 'K', 0, '1', 0, '6', 0
 
 /* Matrix (measured on the board): rows PB3 PB2 PB0 PB1 PB21 (row 4 = encoder clicks), cols PB5 PB4 PB6 PB7.
  * Col 4 = PB10 is the common line of the 4-position layer switch (traced on the PCB): its two other
@@ -34,6 +37,19 @@
  * per detent -> 4 (use 2 if a step only comes every second detent). Big knob: no detents, 20 cycles
  * per turn; 1 counts every intermediate state too (80 steps per turn). */
 #define ENCODER_RESOLUTIONS { 4, 4, 1 }
+#define BNK16_BIG_ENCODER 2
+/* Big knob steps per key press, default 2 = 40 key presses per turn. Custom keycodes in Vial change it,
+ * saved in EEPROM. Every key press gives one haptic burst, steps that send no key give none. */
+#define BNK16_BIG_STEPS_PER_KEY 2
+#define BNK16_BIG_STEPS_PER_KEY_MAX 8
+/* Big knob keys come at least this far apart, faster steps are dropped: hosts can be slower than the
+ * knob (macOS volume keys) and would keep working through the backlog after the knob stopped. */
+#define BNK16_BIG_MIN_KEY_INTERVAL_MS 19
+/* Key press and release of an encoder map step are this far apart. The default (TAP_CODE_DELAY, 30 ms)
+ * blocked the main loop for 60 ms per step and capped the knob at about 16 steps/s. */
+#define ENCODER_MAP_KEY_DELAY 2
+/* Ring buffer, holds one event less than this */
+#define MAX_QUEUED_ENCODER_EVENTS 4
 
 /* RGB: WS2812 on PA10 (TMR1 PWM + DMA). Chain = 16 key LEDs (row-major) + 1 status LED. */
 #define WS2812_DI_PIN A10
@@ -70,6 +86,19 @@
 #define ENABLE_RGB_MATRIX_SOLID_SPLASH
 #define ENABLE_RGB_MATRIX_SOLID_MULTISPLASH
 
+/* Haptic motor on PA7 (measured), low = on (P-FET). It only vibrates on AC, so it gets a square wave.
+ * Every big knob key press gives one burst, to simulate detents. Haptics are switched off with the
+ * hardware switch only: the firmware cannot see it.
+ * These are the defaults: custom keycodes in Vial change frequency, length and the brake pulse,
+ * or reset all of them; they are saved in EEPROM. */
+#define BNK16_HAPTIC_FREQ_HZ 128
+#define BNK16_HAPTIC_FREQ_MIN 64
+#define BNK16_HAPTIC_FREQ_MAX 256
+#define BNK16_HAPTIC_FREQ_STEP 8
+#define BNK16_HAPTIC_PULSES 2      /* push pulses per burst, 1 = a single push of half a period */
+#define BNK16_HAPTIC_PULSES_MAX 16
+#define BNK16_HAPTIC_BRAKE 1       /* brake pulse after the burst */
+
 /* Vial */
 #define VIAL_KEYBOARD_UID {0xDE, 0x8B, 0x27, 0x0F, 0x95, 0xED, 0x79, 0xBB}
 /* Always unlocked for now; removing this activates the unlock combo below */
@@ -95,7 +124,7 @@
 #define COMBO_TERM 50
 #define VIAL_KEY_OVERRIDE_COUNT 16
 
-/* QMK features switched on in keymaps/default/rules.cmake */
+/* QMK features switched on in keymaps/vial/rules.cmake */
 #define ONESHOT_TAP_TOGGLE 5            /* taps that lock a one-shot modifier */
 #define ONESHOT_TIMEOUT 5000            /* ms */
 #define BOTH_SHIFTS_TURNS_ON_CAPS_WORD

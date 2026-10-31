@@ -69,7 +69,7 @@ Flashing removes Binepad's stock UF2 bootloader, so signed Binepad updates no lo
 
 ## Use
 
-Plug the board in and open the Vial app or <https://vial.rocks>. It is detected as `1209:0001` ("BNK16"). On Linux you need the [udev rule from the Vial docs](https://get.vial.today/manual/linux-udev.html).
+Plug the board in and open the Vial app or <https://vial.rocks>. It is detected as `5650:0b16` ("Vialpad BNK16"). On Linux you need the [udev rule from the Vial docs](https://get.vial.today/manual/linux-udev.html).
 
 Default keymap:
 
@@ -91,10 +91,10 @@ Everything specific to this board is in [firmware/ch585_v2/qmk_porting/keyboards
 |---|---|
 | `qmk_config.h` | Pins, encoders, RGB, Vial options |
 | `rules.cmake` | Hardware and base settings |
-| `keymaps/default/rules.cmake` | Feature switches |
+| `keymaps/vial/rules.cmake` | Feature switches |
 | `bnk16.c` | Layer switch, big knob filter, status LED, USB/BLE mode handling, `main()` |
-| `keymaps/default/keymap.c` | Default keymap, custom keycodes |
-| `vial.json` | Layout shown in Vial |
+| `keymaps/vial/keymap.c` | Default keymap, custom keycodes |
+| `vial.json` | Layout shown in Vial, custom keycodes (haptics settings are on the User tab, saved on the board) |
 | `bnk16_diag.c` | Diagnostic builds, see below |
 
 ### Diagnostic builds

@@ -14,9 +14,11 @@
 #ifdef BNK16_PIN_SCAN
 /* ========================================================================
  * Pin scan: find what an unknown output pin switches (found the LED supply PA11).
- * Starts automatically 20 s after boot. Every candidate pin is driven
- * high for 3 s, then low for 5 s, and its name is typed over USB in lower case without Shift or Enter ("a3h ", "b12l ").
- * Excluded: matrix, encoders, PA10/PA11 (LED data/supply), USB, PB22.
+ * Starts automatically 5 s after boot. Every candidate pin is driven high for 1 s, then
+ * buzzed with a 170-250 Hz square wave for 1 s (the stock haptic PWM range; a coin LRA only
+ * vibrates on AC, and the square wave also turns on a low-side driven P-FET). Its name is typed
+ * over USB in lower case without Shift or Enter ("a3 h ", "a3 p ").
+ * Excluded: matrix, encoders, layer/mode switch, PA7 (haptics), PA10 (LED data), USB, PB22.
  * ======================================================================== */
 static const struct { pin_t pin; const char *name; } scan_pins[] = {
     { A0, "a0" },
@@ -26,9 +28,9 @@ static const struct { pin_t pin; const char *name; } scan_pins[] = {
     { A4, "a4" },
     { A5, "a5" },
     { A6, "a6" },
-    { A7, "a7" },
     { A8, "a8" },
     { A9, "a9" },
+    { A11, "a11" },
     { A12, "a12" },
     { A13, "a13" },
     { A14, "a14" },
@@ -37,10 +39,11 @@ static const struct { pin_t pin; const char *name; } scan_pins[] = {
     { B13, "b13" },
     { B18, "b18" },
     { B19, "b19" },
+    { B20, "b20" },
     { B23, "b23" }
 };
 #define SCAN_N (sizeof(scan_pins) / sizeof(scan_pins[0]))
-#define SCAN_STEP_MS 5000
+#define SCAN_STEP_MS 1000
 
 static int8_t   scan_idx   = -1;
 static uint8_t  scan_phase = 0;
@@ -57,18 +60,31 @@ static void scan_type(const char *str) {
 
 static void scan_begin_phase(void) {
     gpio_set_pin_output(scan_pins[scan_idx].pin);
-    gpio_write_pin(scan_pins[scan_idx].pin, scan_phase == 0);
+    gpio_write_pin(scan_pins[scan_idx].pin, 1);
     scan_type(scan_pins[scan_idx].name);
-    scan_type(scan_phase == 0 ? "h " : "l ");
+    scan_type(scan_phase == 0 ? " h " : " p ");
     scan_t = timer_read32();
+}
+
+/* One 250 ms burst per call, stepping through the frequencies, so the main loop keeps running. */
+static void scan_buzz(void) {
+    static const uint16_t half_us[] = { 2000, 2130, 2500, 2940 }; /* 250, 235, 200, 170 Hz */
+    static uint8_t        freq      = 0;
+    uint16_t              half      = half_us[freq];
+
+    freq = (freq + 1) % (sizeof(half_us) / sizeof(half_us[0]));
+    for (uint32_t t = 0; t < 250000; t += half) {
+        gpio_toggle_pin(scan_pins[scan_idx].pin);
+        wait_us(half);
+    }
 }
 
 static void pin_scan_task(void) {
     static bool started = false;
 
-    /* Starts by itself 20 s after boot (time to focus a text field); no key is involved,
+    /* Starts by itself 5 s after boot (time to focus a text field); no key is involved,
      * so no physical key can be held while the report is rewritten. */
-    if (!started && timer_read32() > 20000) {
+    if (!started && timer_read32() > 5000) {
         started    = true;
         scan_idx   = 0;
         scan_phase = 0;
@@ -76,7 +92,13 @@ static void pin_scan_task(void) {
         scan_begin_phase();
     }
 
-    if (scan_idx < 0 || timer_elapsed32(scan_t) < SCAN_STEP_MS) {
+    if (scan_idx < 0) {
+        return;
+    }
+    if (timer_elapsed32(scan_t) < SCAN_STEP_MS) {
+        if (scan_phase == 1) {
+            scan_buzz();
+        }
         return;
     }
     if (scan_phase == 0) {
@@ -116,7 +138,7 @@ static void pin_scan_task(void) {
 static const struct { pin_t pin; const char *name; } sp_pins[] = {
     /* free pins: pull-up, pull-down, driven */
     { A0, "a0" }, { A1, "a1" }, { A2, "a2" }, { A3, "a3" }, { A4, "a4" }, { A5, "a5" }, { A6, "a6" },
-    { A7, "a7" }, { A8, "a8" }, { A9, "a9" }, { A12, "a12" }, { A13, "a13" }, { A14, "a14" }, { A15, "a15" },
+    { A8, "a8" }, { A9, "a9" }, { A12, "a12" }, { A13, "a13" }, { A14, "a14" }, { A15, "a15" },
     { B18, "b18" }, { B19, "b19" }, { B20, "b20" }, { B22, "b22" },
     /* matrix rows: driven low like QMK's scan does */
     { B3, "b3" }, { B2, "b2" }, { B0, "b0" }, { B1, "b1" }, { B21, "b21" },

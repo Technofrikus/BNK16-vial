@@ -2,13 +2,13 @@
  * Binepad BNK16 board entry (based on the CH585 EVB entry)
  * Pin map and open points: docs/bnk16/HARDWARE.md
  *
- * Sections: USB and wired mode, layer switch, housekeeping, RGB, pin setup, big knob, main.
+ * Sections: USB and wired mode, layer switch, housekeeping, haptics, RGB, pin setup, big knob, main.
  *
  * Mode logic (the BLE side lives in ble_app.c, not brought up on this board yet):
  *   Power on: restore the last mode; in BLE mode reconnect to the last device
  *   USB plugged in while running: switch to wired, disconnect BLE and stop advertising
  *   USB unplugged while running: no automatic switch to BLE, a BT key has to be pressed
- *   BT_1/2/3, WIRED_MODE, BT_CLEAR: see keymaps/default/keymap.c
+ *   BT_1/2/3, WIRED_MODE, BT_CLEAR: see keymaps/vial/keymap.c
  */
 
 #include QMK_KEYBOARD_H
@@ -155,9 +155,167 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
             rgb_matrix_set_color(BNK16_STATUS_LED, 40, 16, 0);
         }
     }
+    /* the key that toggles the haptic brake shows its state: red = on, green = off */
+    for (uint8_t row = 0; row < 4; row++) {
+        for (uint8_t col = 0; col < 4; col++) {
+            uint8_t led = row * 4 + col;
+            if (led < led_min || led >= led_max) {
+                continue;
+            }
+            keypos_t pos = {.row = row, .col = col};
+            if (bnk16_keycode_is_haptic_brake(keymap_key_to_keycode(layer_switch_get_layer(pos), pos))) {
+                if (bnk16_haptic_brake_on()) {
+                    rgb_matrix_set_color(led, 110, 0, 0);
+                } else {
+                    rgb_matrix_set_color(led, 0, 110, 0);
+                }
+            }
+            /* the knob resolution keys go from green to red as they near the end of their range */
+            uint16_t keycode = keymap_key_to_keycode(layer_switch_get_layer(pos), pos);
+            bool     up      = bnk16_keycode_is_knob_res(keycode, true);
+            if (up || bnk16_keycode_is_knob_res(keycode, false)) {
+                uint8_t range = BNK16_BIG_STEPS_PER_KEY_MAX - 1;
+                uint8_t left  = up ? bnk16_knob_steps() - 1 : BNK16_BIG_STEPS_PER_KEY_MAX - bnk16_knob_steps();
+                rgb_matrix_set_color(led, 110 * (range - left) / range, 110 * left / range, 0);
+            }
+        }
+    }
     return true;
 }
 #endif
+
+/* ========================================================================
+ * Haptics: TMR0 steps PA7 through a pattern of half-period slots, the pin rests high (motor off).
+ * A burst is N push pulses (low = on) on every second slot: ON off ON off ... ON, so N = 1 is one
+ * push of half a period (3.9 ms at 128 Hz), the shortest the motor responds to well.
+ * The first push starts at once. The optional brake adds two idle slots and then one push, half a
+ * period out of phase with the drive, to counter the ringing. The drive can only push one way, so
+ * this damps the motor instead of stopping it.
+ * ======================================================================== */
+typedef union {
+    uint32_t raw;
+    struct {
+        uint32_t freq_hz : 9;
+        uint32_t pulses : 5;
+        uint32_t knob_steps : 4; /* big knob steps per key press and burst */
+        uint32_t brake : 1;
+        uint32_t unused : 5;
+        uint32_t magic : 8;
+    };
+} haptic_config_t;
+
+#define HAPTIC_MAGIC 0xA9 /* tells this layout from older stored words */
+
+static haptic_config_t haptic_config;
+
+static volatile uint8_t haptic_slot;
+static volatile uint8_t haptic_slots;      /* slots of the whole pattern, incl. brake */
+static volatile uint8_t haptic_drive_slots;
+static volatile bool    haptic_brake;
+static volatile bool    haptic_running = false;
+
+static inline bool haptic_slot_on(uint8_t slot) {
+    return (slot < haptic_drive_slots && !(slot & 1)) || (haptic_brake && slot == haptic_drive_slots + 2);
+}
+
+static inline void haptic_pin(bool on) {
+    if (on) {
+        GPIOA_ResetBits(GPIO_Pin_7);
+    } else {
+        GPIOA_SetBits(GPIO_Pin_7);
+    }
+}
+
+__INTERRUPT __HIGH_CODE void TMR0_IRQHandler(void) {
+    TMR0_ClearITFlag(RB_TMR_IF_CYC_END);
+    if (++haptic_slot < haptic_slots) {
+        haptic_pin(haptic_slot_on(haptic_slot));
+    } else {
+        GPIOA_SetBits(GPIO_Pin_7);
+        R8_TMR0_INTER_EN = 0;
+        R8_TMR0_CTRL_MOD = RB_TMR_ALL_CLEAR;
+        haptic_running   = false;
+    }
+}
+
+/* (Re)starts the pattern; a burst that is still running is cut off and begins again */
+static void haptic_buzz(void) {
+    PFIC_DisableIRQ(TMR0_IRQn);
+    haptic_brake       = haptic_config.brake;
+    haptic_drive_slots = 2 * haptic_config.pulses - 1;
+    haptic_slots       = haptic_drive_slots + (haptic_brake ? 3 : 0);
+    haptic_slot        = 0;
+    haptic_running     = true;
+    haptic_pin(true);
+    TMR0_TimerInit(FREQ_SYS / (2 * haptic_config.freq_hz));
+    TMR0_ClearITFlag(RB_TMR_IF_CYC_END);
+    TMR0_ITCfg(ENABLE, RB_TMR_IE_CYC_END);
+    PFIC_EnableIRQ(TMR0_IRQn);
+}
+
+static void haptic_set_defaults(void) {
+    haptic_config.raw     = 0;
+    haptic_config.magic   = HAPTIC_MAGIC;
+    haptic_config.freq_hz = BNK16_HAPTIC_FREQ_HZ;
+    haptic_config.pulses  = BNK16_HAPTIC_PULSES;
+    haptic_config.knob_steps = BNK16_BIG_STEPS_PER_KEY;
+    haptic_config.brake   = BNK16_HAPTIC_BRAKE;
+}
+
+/* After a reset, a factory reset or an older stored layout the word is invalid: use the defaults */
+static void haptic_load_config(void) {
+    haptic_config.raw = eeconfig_read_kb();
+    if (haptic_config.magic != HAPTIC_MAGIC || haptic_config.freq_hz < BNK16_HAPTIC_FREQ_MIN || haptic_config.freq_hz > BNK16_HAPTIC_FREQ_MAX || haptic_config.pulses < 1 || haptic_config.pulses > BNK16_HAPTIC_PULSES_MAX || haptic_config.knob_steps < 1 || haptic_config.knob_steps > BNK16_BIG_STEPS_PER_KEY_MAX) {
+        haptic_set_defaults();
+    }
+}
+
+static void haptic_save_and_buzz(void) {
+    eeconfig_update_kb(haptic_config.raw);
+    haptic_buzz();
+}
+
+/* Called by the custom keycodes in keymap.c; every change gives a sample burst */
+void bnk16_haptic_reset(void) {
+    haptic_set_defaults();
+    haptic_save_and_buzz();
+}
+
+void bnk16_haptic_toggle_brake(void) {
+    haptic_config.brake = !haptic_config.brake;
+    haptic_save_and_buzz();
+}
+
+void bnk16_haptic_change_freq(bool up) {
+    uint16_t freq = haptic_config.freq_hz;
+    if (up ? freq + BNK16_HAPTIC_FREQ_STEP <= BNK16_HAPTIC_FREQ_MAX : freq - BNK16_HAPTIC_FREQ_STEP >= BNK16_HAPTIC_FREQ_MIN) {
+        haptic_config.freq_hz = up ? freq + BNK16_HAPTIC_FREQ_STEP : freq - BNK16_HAPTIC_FREQ_STEP;
+    }
+    haptic_save_and_buzz();
+}
+
+void bnk16_haptic_change_length(bool up) {
+    if (up ? haptic_config.pulses < BNK16_HAPTIC_PULSES_MAX : haptic_config.pulses > 1) {
+        haptic_config.pulses = up ? haptic_config.pulses + 1 : haptic_config.pulses - 1;
+    }
+    haptic_save_and_buzz();
+}
+
+/* Higher resolution = fewer steps per key press */
+void bnk16_knob_change_resolution(bool up) {
+    if (up ? haptic_config.knob_steps > 1 : haptic_config.knob_steps < BNK16_BIG_STEPS_PER_KEY_MAX) {
+        haptic_config.knob_steps = up ? haptic_config.knob_steps - 1 : haptic_config.knob_steps + 1;
+    }
+    haptic_save_and_buzz();
+}
+
+bool bnk16_haptic_brake_on(void) {
+    return haptic_config.brake;
+}
+
+uint8_t bnk16_knob_steps(void) {
+    return haptic_config.knob_steps;
+}
 
 /* ========================================================================
  * Pin setup, runs once before QMK configures the pins
@@ -182,6 +340,9 @@ static void bnk16_pins_prepare(void) {
     /* PB11 = BT/USB slide switch (the switch also cuts battery +), low = BT position.
      * Not evaluated yet: it becomes the mode input once Bluetooth is brought up. */
     gpio_set_pin_input_high(B11);
+    /* PA7 = haptic P-FET gate, high = motor off; set the level first so it never starts on */
+    GPIOA_SetBits(GPIO_Pin_7);
+    GPIOA_ModeCfg(GPIO_Pin_7, GPIO_ModeOut_PP_5mA);
 }
 
 #ifdef ENCODER_ENABLE
@@ -196,16 +357,16 @@ static void bnk16_pins_prepare(void) {
  * Gray code, so a bounce (+-1) never produces output; a knob resting between
  * two positions keeps its state. The small knobs (resolution 4) use raw reads.
  * ======================================================================== */
-#define BNK16_BIG_ENCODER 2
 static const pin_t   bnk16_enc_pins[2][NUM_ENCODERS] = { ENCODER_A_PINS, ENCODER_B_PINS };
 static const int8_t  bnk16_enc_lut[16]               = { 0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0 }; /* same as QMK's */
 static const uint8_t bnk16_enc_gray[4]               = { 0, 2, 3, 1 }; /* states QMK's LUT counts +1 from one to the next */
-static uint8_t       bnk16_big_raw;
-static int32_t       bnk16_big_pos;
-static int32_t       bnk16_big_filtered;
-static int8_t        bnk16_big_dir;
+static volatile uint8_t bnk16_big_raw;
+static volatile int32_t bnk16_big_pos;
+static volatile int32_t bnk16_big_filtered;
+static volatile int8_t  bnk16_big_dir;
+static volatile int32_t bnk16_big_steps; /* filtered steps not yet handed to QMK, counted by the interrupt */
 
-static uint8_t bnk16_big_read_raw(void) {
+static inline __attribute__((always_inline)) uint8_t bnk16_big_read_raw(void) {
     return (gpio_read_pin(bnk16_enc_pins[0][BNK16_BIG_ENCODER]) ? 1 : 0) | (gpio_read_pin(bnk16_enc_pins[1][BNK16_BIG_ENCODER]) ? 2 : 0);
 }
 
@@ -219,19 +380,29 @@ void encoder_quadrature_init_pin(uint8_t index, bool pad_b) {
                 bnk16_big_pos = bnk16_big_filtered = i;
             }
         }
+        /* sample the knob at 4 kHz in an interrupt, see TMR2_IRQHandler */
+        TMR2_TimerInit(FREQ_SYS / 4000);
+        TMR2_ClearITFlag(RB_TMR_IF_CYC_END);
+        TMR2_ITCfg(ENABLE, RB_TMR_IE_CYC_END);
+        PFIC_EnableIRQ(TMR2_IRQn);
     }
 }
 
 uint8_t encoder_quadrature_read_pin(uint8_t index, bool pad_b) {
     if (index == BNK16_BIG_ENCODER) {
-        uint8_t state = bnk16_enc_gray[bnk16_big_filtered & 3];
-        return pad_b ? (state >> 1) & 1 : state & 1;
+        return 0; /* constant: QMK's decoder never sees the big knob, its steps are queued in matrix_scan_kb */
     }
     return gpio_read_pin(bnk16_enc_pins[pad_b][index]) ? 1 : 0;
 }
 
-/* Runs every scan from matrix_task(), before encoder_task() in the same keyboard_task() pass */
-void matrix_scan_kb(void) {
+/* in QMK's encoder.c, but not declared in its header */
+extern bool encoder_queue_full(void);
+
+/* 4 kHz sampling of the big knob. The main loop is blocked for milliseconds at a time while key reports
+ * are sent, which used to lose quadrature states on fast turns (and show up as steps in the wrong
+ * direction). The interrupt tracks every state change and counts the filtered steps. */
+__INTERRUPT __HIGH_CODE void TMR2_IRQHandler(void) {
+    TMR2_ClearITFlag(RB_TMR_IF_CYC_END);
     uint8_t state = bnk16_big_read_raw();
     if (state != bnk16_big_raw) {
         bnk16_big_pos += bnk16_enc_lut[(bnk16_big_raw << 2) | state];
@@ -242,7 +413,47 @@ void matrix_scan_kb(void) {
         if (dir == bnk16_big_dir || (bnk16_big_pos - bnk16_big_filtered) * dir >= 2) {
             bnk16_big_filtered += dir;
             bnk16_big_dir = dir;
+            bnk16_big_steps += dir;
         }
+    }
+}
+
+/* One key press and one haptic burst per N steps; a change of direction restarts the count. Steps that
+ * come too soon after the last key or find the queue full are dropped without a burst, so a click always
+ * means a key was sent and no backlog can build up. */
+static void big_knob_step(bool positive) {
+    static uint8_t  step_count;
+    static bool     last_positive;
+    static uint32_t last_key_time;
+
+    if (positive != last_positive) {
+        last_positive = positive;
+        step_count    = 0;
+    }
+    if (++step_count < haptic_config.knob_steps) {
+        return;
+    }
+    step_count = 0;
+    if (timer_elapsed32(last_key_time) >= BNK16_BIG_MIN_KEY_INTERVAL_MS && !encoder_queue_full()) {
+        last_key_time = timer_read32();
+        encoder_queue_event(BNK16_BIG_ENCODER, !positive);
+        haptic_buzz();
+    }
+}
+
+/* Runs every scan from matrix_task(), before encoder_task() in the same keyboard_task() pass: hands the
+ * steps counted by the interrupt to big_knob_step (a positive step is what QMK's own decoder reports as
+ * ENCODER_COUNTER_CLOCKWISE, i.e. false). */
+void matrix_scan_kb(void) {
+    /* no atomic instruction here: the core may not run amoswap, so take the count with the interrupt masked */
+    PFIC_DisableIRQ(TMR2_IRQn);
+    int32_t n        = bnk16_big_steps;
+    bnk16_big_steps = 0;
+    PFIC_EnableIRQ(TMR2_IRQn);
+    while (n != 0) {
+        bool positive = n > 0;
+        n += positive ? -1 : 1;
+        big_knob_step(positive);
     }
     matrix_scan_user();
 }
@@ -273,6 +484,7 @@ int main(void) {
 
     protocol_pre_init();
     keyboard_init();
+    haptic_load_config();
     protocol_post_init();
 
     /* set before the mode restore, so housekeeping does not see a plug-in and override the restored mode */

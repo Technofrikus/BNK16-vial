@@ -68,7 +68,7 @@ Build the EVB target on the branch before opening the PR, because `bnk16` does n
 ## Blockers for the board target
 
 - Remove `VIAL_INSECURE`.
-- Replace the pid.codes test ID `1209:0001` with an assigned VID/PID.
+- Replace the self-chosen, unregistered ID `5650:0b16` with an assigned VID/PID.
 - Bring up the mode switch or remove the BLE keycodes from `vial.json`.
 
 ## Conventions upstream asks for

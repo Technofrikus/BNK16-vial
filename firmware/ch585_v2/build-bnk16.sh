@@ -6,7 +6,7 @@ git config --global --add safe.directory '*'
 GCC_PATH="/opt/Toolchain/RISC-V Embedded GCC12/bin"
 cd /workspace/firmware/ch585_v2
 rm -rf build-bnk16 && mkdir -p build-bnk16 && cd build-bnk16
-cmake .. -G Ninja -Dkeyboard=bnk16 -Dkeymap=default \
+cmake .. -G Ninja -Dkeyboard=bnk16 -Dkeymap=vial \
     -DTOOLCHAIN_PREFIX=riscv-wch-elf -DADDITIONAL_TOOLCHAIN_PATH="$GCC_PATH/" \
     -DCMAKE_BUILD_TYPE=Release
 ninja

@@ -1,8 +1,8 @@
 {
   "name": "BNK16",
   "lighting": "vialrgb",
-  "vendorId": "0x1209",
-  "productId": "0x0001",
+  "vendorId": "0x5650",
+  "productId": "0x0B16",
   "matrix": {
     "rows": 5,
     "cols": 5
@@ -90,6 +90,46 @@
       "name": "MOBILE_MODE",
       "title": "Mobile Mode (long press 3s)",
       "shortName": "Mobile"
+    },
+    {
+      "name": "HAPTIC_FREQ_DOWN",
+      "title": "Haptics Frequency Down",
+      "shortName": "HptF-"
+    },
+    {
+      "name": "HAPTIC_FREQ_UP",
+      "title": "Haptics Frequency Up",
+      "shortName": "HptF+"
+    },
+    {
+      "name": "HAPTIC_LEN_DOWN",
+      "title": "Haptics Shorter",
+      "shortName": "HptL-"
+    },
+    {
+      "name": "HAPTIC_LEN_UP",
+      "title": "Haptics Longer",
+      "shortName": "HptL+"
+    },
+    {
+      "name": "HAPTIC_BRAKE",
+      "title": "Haptics Brake Pulse On/Off",
+      "shortName": "HptBr"
+    },
+    {
+      "name": "KNOB_RES_DOWN",
+      "title": "Big Knob Lower Resolution",
+      "shortName": "Knob-"
+    },
+    {
+      "name": "KNOB_RES_UP",
+      "title": "Big Knob Higher Resolution",
+      "shortName": "Knob+"
+    },
+    {
+      "name": "HAPTIC_RESET",
+      "title": "Haptics and Big Knob Reset to Defaults",
+      "shortName": "HptRs"
     }
   ]
 }

@@ -24,6 +24,8 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 | LED supply enable | PA11 | High = on |
 | USB/BT slide switch | PB11 | Low = BT position. The switch also cuts battery +. Pull-up is set, the level is not evaluated yet |
 
+| Haptic motor | PA7 | Found with the pin scan. Vibrates on a 170-250 Hz square wave, not on steady high; rests high. The on/off switch is hardware only (GND to the drain of a 3401 P-MOSFET) |
+
 ## Unknown
 
 | Function | State |
@@ -31,7 +33,6 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 | Battery ADC | Stock code suggests AIN12, not checked. The enable pin it suggests (PB17) is an encoder pin, so that reading is wrong |
 | VBUS detect | No pin known. USB state is taken from the USBHS driver, so an unplugged cable and a suspended host look the same |
 | Charger status | No pin known |
-| Haptic motor drive | No pin known. The on/off switch is hardware only (GND to the drain of a 3401 P-MOSFET) |
 | Debug UART | PA9/PA8 from the stock code, unverified |
 
 ## Going back to stock

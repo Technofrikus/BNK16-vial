@@ -279,6 +279,14 @@ const uint8_t MyLangDescr[ ] =
 };
 
 /* Manufacturer Descriptor */
+#ifdef MANUFACTURER_UTF16
+const uint8_t MyManuInfo[ ] =
+{
+    2 + sizeof( (const uint8_t[ ]){ MANUFACTURER_UTF16 } ),
+    0x03,
+    MANUFACTURER_UTF16
+};
+#else
 const uint8_t MyManuInfo[ ] =
 {
     0x0E,
@@ -296,8 +304,17 @@ const uint8_t MyManuInfo[ ] =
     'n',
     0
 };
+#endif
 
 /* Product Information */
+#ifdef PRODUCT_UTF16
+const uint8_t MyProdInfo[ ]  =
+{
+    2 + sizeof( (const uint8_t[ ]){ PRODUCT_UTF16 } ),
+    0x03,
+    PRODUCT_UTF16
+};
+#else
 const uint8_t MyProdInfo[ ]  =
 {
     0x0C,
@@ -313,6 +330,7 @@ const uint8_t MyProdInfo[ ]  =
     '5',
     0
 };
+#endif
 
 /* Serial Number Information (Vial magic: vial:f64c2b3c) */
 const uint8_t  MySerNumInfo[ ] =

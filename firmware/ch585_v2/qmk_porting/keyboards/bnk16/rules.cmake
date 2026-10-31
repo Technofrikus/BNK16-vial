@@ -1,4 +1,4 @@
-# BNK16 hardware and base settings. Feature switches are in keymaps/default/rules.cmake.
+# BNK16 hardware and base settings. Feature switches are in keymaps/vial/rules.cmake.
 set(MOUSE_ENABLE ON CACHE BOOL "KB" FORCE)
 set(NKRO_ENABLE ON CACHE BOOL "KB" FORCE)
 set(ENCODER_ENABLE ON CACHE BOOL "KB" FORCE)

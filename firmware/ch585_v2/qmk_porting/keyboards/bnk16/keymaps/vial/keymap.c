@@ -1,5 +1,5 @@
 /*
- * BNK16 default keymap: numpad on layer 0, layers 1-3 transparent (selected by the 4-position switch).
+ * BNK16 Vial keymap: numpad on layer 0, layers 1-3 transparent (selected by the 4-position switch).
  *
  * Custom keycodes (same order as customKeycodes in vial.json):
  *   BT_1 / BT_2 / BT_3  tap: switch to that device, hold 3 s: pair it
@@ -7,6 +7,11 @@
  *   WIRED_MODE          switch to wired mode
  *   FACTORY_RESET       hold 5 s: clear bonds and settings, then reboot
  *   MOBILE_MODE         hold 3 s: toggle mobile mode (keys locked, 2 s BLE connection interval)
+ *   HAPTIC_FREQ_DOWN/UP burst frequency, 8 Hz per press
+ *   HAPTIC_LEN_DOWN/UP  burst length, 1 push pulse per press
+ *   HAPTIC_BRAKE        brake pulse after the burst on/off
+ *   KNOB_RES_DOWN/UP    big knob resolution (key presses and haptic bursts per turn: 80 / steps per key, 1-8)
+ *   HAPTIC_RESET        all haptic settings and the knob resolution back to the defaults
  */
 
 #include QMK_KEYBOARD_H
@@ -22,6 +27,14 @@ enum custom_keycodes {
     WIRED_MODE,
     FACTORY_RESET,
     MOBILE_MODE,
+    HAPTIC_FREQ_DOWN,
+    HAPTIC_FREQ_UP,
+    HAPTIC_LEN_DOWN,
+    HAPTIC_LEN_UP,
+    HAPTIC_BRAKE,
+    KNOB_RES_DOWN,
+    KNOB_RES_UP,
+    HAPTIC_RESET,
 };
 
 // clang-format off
@@ -39,7 +52,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         KC_P4,   KC_P5,   KC_P6,   KC_PAST,
         KC_P1,   KC_P2,   KC_P3,   KC_PMNS,
         KC_P0,   KC_PDOT, KC_PENT, KC_PPLS,
-        KC_MUTE, KC_MPLY
+        KC_MPLY, KC_MFFD
     ),
     [1] = TRANSPARENT_LAYER,
     [2] = TRANSPARENT_LAYER,
@@ -49,9 +62,10 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #if defined(ENCODER_MAP_ENABLE)
 #define TRANSPARENT_ENCODERS { ENCODER_CCW_CW(KC_TRNS, KC_TRNS), ENCODER_CCW_CW(KC_TRNS, KC_TRNS), ENCODER_CCW_CW(KC_TRNS, KC_TRNS) }
 
-/* Encoder 0 = small left, encoder 1 = small right, encoder 2 = big knob */
+/* Encoder 0 = small left (display brightness), encoder 1 = small right (Ctrl+/ and Ctrl+], which are
+ * zoom out/in on a German layout), encoder 2 = big knob (fine volume steps on macOS) */
 const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][NUM_DIRECTIONS] = {
-    [0] = { ENCODER_CCW_CW(KC_VOLD, KC_VOLU), ENCODER_CCW_CW(KC_PGUP, KC_PGDN), ENCODER_CCW_CW(KC_WH_U, KC_WH_D) },
+    [0] = { ENCODER_CCW_CW(KC_BRID, KC_BRIU), ENCODER_CCW_CW(LCTL(KC_SLSH), LCTL(KC_RBRC)), ENCODER_CCW_CW(LSA(KC_KB_VOLUME_DOWN), LSA(KC_KB_VOLUME_UP)) },
     [1] = TRANSPARENT_ENCODERS,
     [2] = TRANSPARENT_ENCODERS,
     [3] = TRANSPARENT_ENCODERS,
@@ -107,18 +121,54 @@ static void factory_reset(void) {
     PFIC_SystemReset();
 }
 
+/* True for the brake key as stored in the keymap (Vial stores its custom keycodes as 0x7E00 + index) */
+bool bnk16_keycode_is_haptic_brake(uint16_t keycode) {
+    return keycode == HAPTIC_BRAKE || keycode == 0x7E00 + (HAPTIC_BRAKE - BT_1);
+}
+
+/* Same for the knob resolution keys */
+bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up) {
+    uint16_t knob_key = up ? KNOB_RES_UP : KNOB_RES_DOWN;
+    return keycode == knob_key || keycode == 0x7E00 + (knob_key - BT_1);
+}
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         power_notify_activity();
     }
 
     /* Vial stores its custom keycodes as 0x7E00 + index */
-    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= MOBILE_MODE - BT_1) {
+    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= HAPTIC_RESET - BT_1) {
         keycode = BT_1 + (keycode & 0xFF);
     }
 
     /* mobile mode locks the keyboard, only its own key still works */
     if (mobile_mode_active && keycode != MOBILE_MODE) {
+        return false;
+    }
+
+    if (keycode >= HAPTIC_FREQ_DOWN && keycode <= HAPTIC_RESET) {
+        if (record->event.pressed) {
+            switch (keycode) {
+                case HAPTIC_FREQ_DOWN:
+                case HAPTIC_FREQ_UP:
+                    bnk16_haptic_change_freq(keycode == HAPTIC_FREQ_UP);
+                    break;
+                case HAPTIC_LEN_DOWN:
+                case HAPTIC_LEN_UP:
+                    bnk16_haptic_change_length(keycode == HAPTIC_LEN_UP);
+                    break;
+                case HAPTIC_BRAKE:
+                    bnk16_haptic_toggle_brake();
+                    break;
+                case HAPTIC_RESET:
+                    bnk16_haptic_reset();
+                    break;
+                default:
+                    bnk16_knob_change_resolution(keycode == KNOB_RES_UP);
+                    break;
+            }
+        }
         return false;
     }
 

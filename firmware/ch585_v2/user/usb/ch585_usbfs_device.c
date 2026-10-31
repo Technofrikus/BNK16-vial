@@ -20,8 +20,13 @@ const uint8_t FS_MyDevDescr[] = {
     0x00,                                                   // bDeviceSubClass
     0x00,                                                   // bDeviceProtocol
     DevEP0SIZE,                                             // bMaxPacketSize0
+#ifdef VENDOR_ID
+    (uint8_t)VENDOR_ID, (uint8_t)(VENDOR_ID >> 8),          // idVendor
+    (uint8_t)PRODUCT_ID, (uint8_t)(PRODUCT_ID >> 8),        // idProduct
+#else
     0x3d, 0x41,                                             // idVendor
     0x07, 0x21,                                             // idProduct
+#endif
     0x00, 0x01,                                             // bcdDevice
     0x01,                                                   // iManufacturer
     0x02,                                                   // iProduct
@@ -251,16 +256,30 @@ const uint8_t FS_MyLangDescr[] = {
 };
 
 // 厂商描述符
+#ifdef MANUFACTURER_UTF16
+const uint8_t FS_MyManuInfo[] = {
+    2 + sizeof((const uint8_t[]){ MANUFACTURER_UTF16 }), 0x03,
+    MANUFACTURER_UTF16
+};
+#else
 const uint8_t FS_MyManuInfo[] = {
     0x0E, 0x03,
     'w', 0, 'c', 0, 'h', 0, '.', 0, 'c', 0, 'n', 0
 };
+#endif
 
 // 产品描述符
+#ifdef PRODUCT_UTF16
+const uint8_t FS_MyProdInfo[] = {
+    2 + sizeof((const uint8_t[]){ PRODUCT_UTF16 }), 0x03,
+    PRODUCT_UTF16
+};
+#else
 const uint8_t FS_MyProdInfo[] = {
     0x0C, 0x03,
     'C', 0, 'H', 0, '5', 0, '8', 0, '5', 0
 };
+#endif
 
 // 序列号描述符
 const uint8_t FS_MySerNumInfo[] = {
