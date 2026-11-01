@@ -15,19 +15,21 @@
  * ======================================================================== */
 
 /* 蓝牙广播设备名 — 手机/电脑搜索蓝牙时显示的名字 */
-#define BLE_DEVICE_NAME             "CH585 Keyboard"
+#define BLE_DEVICE_NAME             "BNK16"
 
 /* 设备信息服务里的厂商名 */
-#define BLE_MANUFACTURER_NAME       "NookCraftLab"
+#define BLE_MANUFACTURER_NAME       "Vialpad"
 
 /* 设备信息服务里的型号 */
-#define BLE_MODEL_NUMBER            "CH585-EVB"
+#define BLE_MODEL_NUMBER            "BNK16"
 
 /* ========================================================================
  * 连接参数配置
  * ======================================================================== */
 
-/* 从机延迟 — 0 表示每个连接事件都响应，延迟最低但耗电 */
+/* Connection events the board may skip with nothing to send, active interval only. Must stay 0 for now:
+ * 30 dropped the link about 7 s after the last key (5 s supervision timeout included), most likely because
+ * the internal 32 kHz RC clock (the board has no crystal) drifts too far over a 465 ms skip. */
 #define BLE_SLAVE_LATENCY           0
 
 /* 监控超时（单位：10ms）— 500 = 5秒没响应就断开
@@ -41,17 +43,17 @@
 
 /* ========================================================================
  * 阶梯式连接间隔（睡眠时动态调整）
- * 档位0~3 对应 100/300/500/1000ms
+ * 档位0~3 对应 15/300/500/1000ms
  * 时间阈值：0~30/30~90/90~180/180+分钟
- * 连接间隔单位：1.25ms（100ms=80, 300ms=240, 500ms=400, 1000ms=800）
+ * 连接间隔单位：1.25ms（15ms=12, 300ms=240, 500ms=400, 1000ms=800）
  * ======================================================================== */
 
 /* 档位数量 */
 #define BLE_CONN_INTERVAL_LEVELS    4
 
 /* 各档位的最小/最大连接间隔（单位：1.25ms）*/
-#define BLE_CONN_INTERVAL_L0_MIN    80    /* 100ms */
-#define BLE_CONN_INTERVAL_L0_MAX    80
+#define BLE_CONN_INTERVAL_L0_MIN    12    /* 15ms */
+#define BLE_CONN_INTERVAL_L0_MAX    12
 #define BLE_CONN_INTERVAL_L1_MIN    240   /* 300ms */
 #define BLE_CONN_INTERVAL_L1_MAX    240
 #define BLE_CONN_INTERVAL_L2_MIN    400   /* 500ms */
@@ -65,7 +67,7 @@
 #define BLE_CONN_INTERVAL_L2_TIME   (180 * 60 * 1000)  /* 180分钟 */
 /* L3 是 L2_TIME 以上，不需要额外阈值 */
 
-/* 兼容旧代码：日常模式用档位0（100ms）*/
+/* 兼容旧代码：日常模式用档位0（15ms）*/
 #define BLE_MIN_CONN_INTERVAL       BLE_CONN_INTERVAL_L0_MIN
 #define BLE_MAX_CONN_INTERVAL       BLE_CONN_INTERVAL_L0_MAX
 

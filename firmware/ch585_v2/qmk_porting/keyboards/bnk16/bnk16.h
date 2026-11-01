@@ -25,8 +25,8 @@
 }
 // clang-format on
 
-/* Switch to wired mode: stops BLE and remembers the mode (bnk16.c) */
-void enter_wired_mode(void);
+/* True in the USB position of the slide switch (bnk16.c) */
+extern bool wired_mode_active;
 
 /* Haptic and big knob settings, used by the custom keycodes in keymap.c */
 void bnk16_haptic_reset(void);

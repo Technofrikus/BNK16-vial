@@ -892,12 +892,10 @@ void USB2_DEVICE_IRQHandler( void )
         /* usb suspend interrupt processing */
         if ( R8_USB2_MIS_ST & USBHS_UDMS_SUSPEND  )
         {
+            /* Only record it. MCU_Sleep_Wakeup_Operate() would halt the MCU with all interrupts off when
+             * the host had enabled remote wakeup. An unplugged cable also looks like a suspend, so that
+             * stopped the keyboard and BLE on battery, with nothing to wake it. */
             USBHS_DevSleepStatus |= 0x02;
-            if( USBHS_DevSleepStatus == 0x03 )
-            {
-                /* Handling usb sleep here */
-                MCU_Sleep_Wakeup_Operate( );
-            }
         }
         else
         {

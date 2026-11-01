@@ -45,7 +45,7 @@
 /* Big knob keys come at least this far apart, faster steps are dropped: hosts can be slower than the
  * knob (macOS volume keys) and would keep working through the backlog after the knob stopped. */
 #define BNK16_BIG_MIN_KEY_INTERVAL_MS 19
-/* Key press and release of an encoder map step are this far apart. The default (TAP_CODE_DELAY, 30 ms)
+/* Key press and release of an encoder map step are this far apart. The default (TAP_CODE_DELAY, then 30 ms)
  * blocked the main loop for 60 ms per step and capped the knob at about 16 steps/s. */
 #define ENCODER_MAP_KEY_DELAY 2
 /* Ring buffer, holds one event less than this */
@@ -131,8 +131,9 @@
 #define BOTH_SHIFTS_TURNS_ON_CAPS_WORD
 #define CAPS_WORD_IDLE_TIMEOUT 5000     /* ms */
 
-/* the USB port code overwrites the endpoint buffer, so press and release need a gap */
-#define TAP_CODE_DELAY 30
+/* Gap between press and release, and between macro characters (about 50 characters per s). The USB and
+ * BLE send paths wait for a free buffer, so this only has to suit the host. */
+#define TAP_CODE_DELAY 10
 
 /* Diagnostics (bnk16_diag.c), they type their results over USB:
  * pin scan drives each free pin in turn, switch probe reports every pin state change. */

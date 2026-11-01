@@ -35,10 +35,13 @@ typedef enum {
  */
 void ble_app_init(void);
 
-/* BLE 主循环处理 — 需要在主循环里定期调用
- * 内部调用 TMOS_SystemProcess() 处理 BLE 协议栈任务
+/* Periodic work outside the stack: reconnect and pairing timeouts, deferred bond table save.
+ * Call from housekeeping. TMOS_SystemProcess() runs in platform_run(), not here.
  */
 void ble_app_poll(void);
+
+/* Pairing progress from hiddev.c: marks the current slot as paired on success */
+void ble_app_pair_state(uint8_t state, uint8_t status);
 
 /* 发送键盘 HID 报告到蓝牙主机
  * 参数：
@@ -47,6 +50,10 @@ void ble_app_poll(void);
  * 报告格式：标准 USB HID 键盘报告（8字节）
  */
 void ble_send_keyboard_report(uint8_t modifiers, uint8_t *keys);
+
+/* wait_ms() keeps BLE running only while the QMK task runs in the main loop */
+void ble_qmk_task_running(bool running);
+void ble_wait_ms(uint32_t ms);
 
 /* 发送空键盘报告（释放所有键）*/
 void ble_send_keyboard_release(void);
@@ -66,16 +73,22 @@ void ble_start_advertising(void);
 /* 停止广播（USB 连接时调用，省电）*/
 void ble_stop_advertising(void);
 
+/* Wired mode: disconnect, stop advertising, drop pending slot changes */
+void ble_radio_off(void);
+
+/* Key press in BT mode: restart the current slot if BLE gave up (reconnect timeout) */
+void ble_wake_from_standby(void);
+
 /* 断开当前连接 */
 void ble_disconnect(void);
 
-/* 切换到指定蓝牙设备（1/2/3）
- * 有保存的配对信息则尝试回连，没有则开始广播等待配对
+/* Switch to a slot (1/2/3): reconnect if it has a bond, otherwise open for pairing.
+ * Does nothing in wired mode.
  */
 void ble_switch_device(uint8_t device_idx);
 
-/* 配对指定蓝牙设备（1/2/3）
- * 清除该设备的旧配对信息，进入配对模式（广播中，可被搜索到）
+/* Open a slot (1/2/3) for pairing. The old bond stays until a new pairing replaces it.
+ * Does nothing in wired mode.
  */
 void ble_pair_device(uint8_t device_idx);
 
@@ -86,26 +99,13 @@ void ble_clear_bonds(void);
 uint16_t ble_get_conn_handle(void);
 
 /* ========================================================================
- * 模式记忆 — 记住上次使用的模式（有线/蓝牙）和设备槽位
- * 上电时恢复到上次的状态，蓝牙模式自动回连上次设备
+ * Slot memory. The mode is not stored: the board code decides it.
  * ======================================================================== */
 
-/* 保存当前模式到 EEPROM（切换模式/设备时调用）
- * 参数：wired - true=有线模式，false=蓝牙模式
- *       device - 蓝牙设备槽位（1-3，有线模式时忽略）
- */
-void ble_save_mode(bool wired, uint8_t device);
+/* Selected slot (1-3) */
+uint8_t ble_get_current_device(void);
 
-/* 从 EEPROM 读取上次的模式
- * 参数：wired - 输出，true=上次是有线，false=上次是蓝牙
- *       device - 输出，上次的蓝牙设备槽位（1-3）
- */
-void ble_load_mode(bool *wired, uint8_t *device);
-
-/* 上电恢复上次模式 — 在 main 函数初始化完成后调用
- * 如果上次是有线模式 → 进入有线模式
- * 如果上次是蓝牙模式 → 切换到上次设备槽位，自动回连
- */
+/* Called from main after init: restores the slot. It starts on GAPROLE_STARTED, if not in wired mode. */
 void ble_restore_last_mode(void);
 
 /* 连接间隔动态调整

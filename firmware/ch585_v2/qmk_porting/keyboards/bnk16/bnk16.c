@@ -4,11 +4,13 @@
  *
  * Sections: USB and wired mode, layer switch, housekeeping, haptics, RGB, pin setup, big knob, main.
  *
- * Mode logic (the BLE side lives in ble_app.c, not brought up on this board yet):
- *   Power on: restore the last mode; in BLE mode reconnect to the last device
- *   USB plugged in while running: switch to wired, disconnect BLE and stop advertising
- *   USB unplugged while running: no automatic switch to BLE, a BT key has to be pressed
- *   BT_1/2/3, WIRED_MODE, BT_CLEAR: see keymaps/vial/keymap.c
+ * Mode logic (the BLE side lives in ble_app.c): the PB11 slide switch is the only authority.
+ *   BT position (low): BLE runs, keys go over BLE, even with a USB cable in. Vial over USB keeps working.
+ *   USB position (high): keys go over USB, BLE is disconnected and stopped.
+ *   Read at boot and debounced at runtime, so moving the switch with a cable in works without a reset.
+ *   Going to BT, at boot or at runtime: reconnect to the saved slot, a slot without a bond opens for pairing.
+ *   USB enumeration and suspend do not change the mode, usb_is_connected() only serves the status LED.
+ *   BT_1/2/3: see keymaps/vial/keymap.c. They do nothing in the USB position.
  */
 
 #include QMK_KEYBOARD_H
@@ -19,13 +21,18 @@
 #include "CH58x_common.h"
 
 /* ========================================================================
- * USB and wired mode
+ * Mode switch and USB state
  * ======================================================================== */
 
-/* Read by the state callbacks in ble_app.c */
+/* Read by the state callbacks in ble_app.c, the send path in protocol_usb.c and keymap.c */
 bool wired_mode_active = false;
 
-static bool last_usb_connected = false;
+/* PB11 slide switch: low = BT position, high = USB position (measured) */
+#define MODE_SWITCH_DEBOUNCE_MS 50
+
+static inline bool mode_switch_is_usb(void) {
+    return gpio_read_pin(B11);
+}
 
 /* USB connected and enumerated. The port never reports to QMK's usb_device_state (it always reads
  * INIT), so read the USBHS driver state directly: EnumStatus is set by SET_CONFIGURATION and cleared
@@ -39,37 +46,34 @@ static bool usb_is_connected(void) {
     return USBHS_DevEnumStatus && !(USBHS_DevSleepStatus & USBHS_SLEEP_SUSPENDED);
 }
 
-void enter_wired_mode(void) {
+static void enter_wired_mode(void) {
     /* set first: the BLE state callbacks triggered by the disconnect below check it */
     wired_mode_active = true;
     power_set_wired_mode(true); /* no sleep in wired mode */
-    ble_save_mode(true, 1);
-    if (ble_is_connected()) {
-        ble_disconnect();
-    }
-    ble_stop_advertising();
+    ble_radio_off();
 }
 
 static void exit_wired_mode(void) {
     wired_mode_active = false;
     power_set_wired_mode(false);
+    ble_switch_device(ble_get_current_device());
 }
 
-static void usb_mode_task(void) {
-    bool usb_connected = usb_is_connected();
+/* The switch must be stable for MODE_SWITCH_DEBOUNCE_MS before the mode follows it */
+static void mode_switch_task(void) {
+    static bool     last_read;
+    static uint32_t last_change;
+    bool            usb_position = mode_switch_is_usb();
 
-    if (usb_connected != last_usb_connected) {
-        if (usb_connected) {
+    if (usb_position != last_read) {
+        last_read   = usb_position;
+        last_change = timer_read32();
+    } else if (usb_position != wired_mode_active && timer_elapsed32(last_change) >= MODE_SWITCH_DEBOUNCE_MS) {
+        if (usb_position) {
             enter_wired_mode();
         } else {
             exit_wired_mode();
         }
-        last_usb_connected = usb_connected;
-    }
-
-    /* the BLE stack can restart advertising on its own */
-    if (wired_mode_active && (ble_get_state() == BLE_STATE_ADVERTISING || ble_get_state() == BLE_STATE_PAIRING)) {
-        ble_stop_advertising();
     }
 }
 
@@ -112,7 +116,8 @@ void housekeeping_task_kb(void) {
         R16_PIN_ALTERNATE &= ~RB_RF_ANT_SW_EN;
     }
 
-    usb_mode_task();
+    mode_switch_task();
+    ble_app_poll();
 
 #ifdef RGB_MATRIX_ENABLE
     status_led_task();
@@ -316,9 +321,7 @@ static bool key_color(uint16_t keycode, rgb_t *color) {
     /* the key of the selected Bluetooth device shows its connection */
     uint8_t device = bnk16_keycode_bt_device(keycode);
     if (device != 0) {
-        uint8_t current;
-        ble_load_mode(NULL, &current);
-        if (device == current) {
+        if (device == ble_get_current_device()) {
             if (ble_is_connected()) {
                 *color = COLOR_BLUE;
                 return true;
@@ -578,8 +581,7 @@ static void bnk16_pins_prepare(void) {
      * UD+ pull-up off PB10/PB11 (USB runs on the HS port only, see usb_config.h) */
     R16_PIN_CONFIG &= ~(RB_PIN_USB_EN | RB_UDP_PU_EN);
     GPIOBDigitalCfg(ENABLE, GPIO_Pin_10 | GPIO_Pin_11);
-    /* PB11 = BT/USB slide switch (the switch also cuts battery +), low = BT position.
-     * Not evaluated yet: it becomes the mode input once Bluetooth is brought up. */
+    /* PB11 = BT/USB slide switch (the switch also cuts battery +), low = BT position, see mode_switch_task() */
     gpio_set_pin_input_high(B11);
     /* PA7 = haptic P-FET gate, high = motor off; set the level first so it never starts on */
     GPIOA_SetBits(GPIO_Pin_7);
@@ -728,11 +730,12 @@ int main(void) {
     haptic_load_config();
     protocol_post_init();
 
-    /* set before the mode restore, so housekeeping does not see a plug-in and override the restored mode */
-    last_usb_connected = usb_is_connected();
-
     battery_init();
     power_init();
+
+    /* the mode comes from the switch; TMOS runs from the loop below, so BLE has not started anything yet */
+    wired_mode_active = mode_switch_is_usb();
+    power_set_wired_mode(wired_mode_active);
     ble_restore_last_mode();
 
     for (;;) {

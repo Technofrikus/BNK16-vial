@@ -20,6 +20,7 @@
 #include "devinfoservice.h"
 #include "hidkbd.h"
 #include "hiddev.h"
+#include "ble_app.h"
 
 /*********************************************************************
  * MACROS
@@ -834,6 +835,8 @@ static void hidDevParamUpdateCB(uint16_t connHandle, uint16_t connInterval,
  */
 static void hidDevPairStateCB(uint16_t connHandle, uint8_t state, uint8_t status)
 {
+    ble_app_pair_state(state, status);
+
     if(state == GAPBOND_PAIRING_STATE_COMPLETE)
     {
         if(status == SUCCESS)

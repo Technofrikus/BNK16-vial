@@ -1,13 +1,14 @@
 /*
- * BNK16 Vial keymap: numpad on layer 0, layers 1-3 empty (selected by the 4-position switch). Their keys
- * are KC_NO, so they stay dark until assigned; encoder clicks and rotation stay transparent.
+ * BNK16 Vial keymap: numpad on layer 0, the Bluetooth keys in the top row of layer 3, layers 1-2 and the
+ * rest of layer 3 empty (layers are selected by the 4-position switch). Empty keys are KC_NO, so they stay
+ * dark until assigned; encoder clicks and rotation stay transparent.
  *
  * Custom keycodes (same order as customKeycodes in vial.json):
- *   BT_1 / BT_2 / BT_3  tap: switch to that device, hold 3 s: pair it
- *   BT_CLEAR            clear all bonds
- *   WIRED_MODE          switch to wired mode
+ *   BT_1 / BT_2 / BT_3  tap: switch to that device, hold 3 s: pair it; nothing in the USB switch position
+ *   BT_CLEAR            clear all bonds at once on a single tap, so not on the default map
  *   FACTORY_RESET       hold 5 s: clear bonds and settings, then reboot
- *   MOBILE_MODE         hold 3 s: toggle mobile mode (keys locked, 2 s BLE connection interval)
+ *   MOBILE_MODE         hold 3 s: toggle mobile mode (keys locked, 2 s BLE connection interval); in the USB
+ *                       switch position it can only be turned off
  *   HAPTIC_FREQ_DOWN/UP burst frequency, 8 Hz per press
  *   HAPTIC_LEN_DOWN/UP  burst length, 1 push pulse per press
  *   HAPTIC_BRAKE        brake pulse after the burst on/off
@@ -26,7 +27,6 @@ enum custom_keycodes {
     BT_2,
     BT_3,
     BT_CLEAR,
-    WIRED_MODE,
     FACTORY_RESET,
     MOBILE_MODE,
     HAPTIC_FREQ_DOWN,
@@ -39,6 +39,9 @@ enum custom_keycodes {
     HAPTIC_RESET,
     LED_MASK,
 };
+
+/* Vial shows and stores its custom keycodes as 0x7E00 + index (QK_KB_0), so use that in the default map too */
+#define VIAL_KC(kc) (QK_KB_0 + ((kc) - BT_1))
 
 // clang-format off
 #define EMPTY_LAYER LAYOUT( \
@@ -59,7 +62,13 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     ),
     [1] = EMPTY_LAYER,
     [2] = EMPTY_LAYER,
-    [3] = EMPTY_LAYER,
+    [3] = LAYOUT(
+        VIAL_KC(BT_1), VIAL_KC(BT_2), VIAL_KC(BT_3), KC_NO,
+        KC_NO,   KC_NO,   KC_NO,   KC_NO,
+        KC_NO,   KC_NO,   KC_NO,   KC_NO,
+        KC_NO,   KC_NO,   KC_NO,   KC_NO,
+        KC_TRNS, KC_TRNS
+    ),
 };
 
 #if defined(ENCODER_MAP_ENABLE)
@@ -159,6 +168,11 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         return false;
     }
 
+    /* after a reconnect timeout any key restarts the reconnect; the BT keys choose a slot themselves */
+    if (record->event.pressed && (keycode < BT_1 || keycode > BT_3)) {
+        ble_wake_from_standby();
+    }
+
     if (keycode == LED_MASK) {
         if (record->event.pressed) {
             bnk16_toggle_show_unassigned();
@@ -200,9 +214,6 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
             case BT_CLEAR:
                 ble_clear_bonds();
                 break;
-            case WIRED_MODE:
-                enter_wired_mode();
-                break;
             default:
                 long_press_keycode   = keycode;
                 long_press_start     = timer_read32();
@@ -227,7 +238,9 @@ void housekeeping_task_user(void) {
                 factory_reset();
                 break;
             case MOBILE_MODE:
-                toggle_mobile_mode();
+                if (!wired_mode_active || mobile_mode_active) {
+                    toggle_mobile_mode();
+                }
                 break;
             default:
                 ble_pair_device(device_of(long_press_keycode));

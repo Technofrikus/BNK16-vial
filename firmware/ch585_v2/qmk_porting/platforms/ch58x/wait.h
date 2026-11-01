@@ -23,7 +23,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 extern "C" {
 #endif
 
-#define wait_ms(ms) DelayMs(ms)
+/* Keeps BLE running while QMK waits, see ble_app.c */
+void ble_wait_ms(uint32_t ms);
+#define wait_ms(ms) ble_wait_ms(ms)
 #define wait_us(us) DelayUs(us)
 
 #ifndef GPIO_INPUT_PIN_DELAY

@@ -2,7 +2,7 @@
  * power_management.c — 电源管理
  * 功能：10分钟无操作进睡眠，按键唤醒；有线模式不进睡眠；
  *       睡眠时关LED，低电量LED1慢闪；WFI低功耗；
- *       阶梯式蓝牙连接间隔（100/300/500/1000ms，按睡眠时长30/90/180分钟切换）
+ *       阶梯式蓝牙连接间隔（15/300/500/1000ms，按睡眠时长30/90/180分钟切换）
  */
 
 #include "power_management.h"
@@ -76,7 +76,7 @@ void power_task(void)
         } else if (sleep_duration >= BLE_CONN_INTERVAL_L0_TIME) {
             target_level = 1;  /* 30~90分钟：300ms */
         } else {
-            target_level = 0;  /* 0~30分钟：100ms */
+            target_level = 0;  /* 0~30分钟：15ms */
         }
 
         if (target_level != ble_get_current_interval_level()) {
@@ -122,7 +122,7 @@ void power_enter_sleep(void)
 
     current_power_state = POWER_STATE_SLEEPING;
     sleep_start_time = timer_read32();
-    ble_request_conn_interval(0);  /* 刚睡眠保持100ms低延迟 */
+    ble_request_conn_interval(0);  /* 刚睡眠保持低延迟 */
 
     /* LED0 连接状态灯由 led_indicator 管理，睡眠时自动熄灭 */
     low_battery_active = false;
@@ -134,7 +134,7 @@ void power_wake_up(void)
 
     current_power_state = POWER_STATE_ACTIVE;
     last_activity_time = timer_read32();
-    ble_request_conn_interval(0);  /* 唤醒恢复100ms低延迟 */
+    ble_request_conn_interval(0);  /* 唤醒恢复低延迟 */
 
     /* LED0 连接状态灯由 led_indicator 管理 */
 }

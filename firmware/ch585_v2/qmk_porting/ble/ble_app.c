@@ -16,9 +16,7 @@
 #include "devinfoservice.h"
 #include "hidkbd.h"
 #include "CH58xBLE_LIB.h"
-#include "eeprom.h"  /* EEPROM 读写 — 设备绑定表持久化 */
 #include "timer.h"   /* timer_read32 — 超时判断 */
-#include "power_management.h"  /* 有线模式下不进睡眠，切换蓝牙时清除标志 */
 
 /* 有线模式激活标志 — 定义在 ch585_evb.c
  * 有线模式下，蓝牙状态变化不应覆盖 LED 状态（LED 常亮表示有线）
@@ -37,15 +35,15 @@ static ble_state_t current_state = BLE_STATE_IDLE;
  * 三设备切换 — 绑定表（3个槽位，EEPROM持久化）
  * ======================================================================== */
 
+#define BLE_SEND_WAIT_MS        500     /* longest wait for a free packet buffer */
 #define BLE_MAX_DEVICES         3       /* 最多3个设备槽位 */
 #define BLE_BOND_TABLE_MAGIC    0xA5    /* 魔数，判断 EEPROM 数据是否有效 */
-#define BLE_BOND_TABLE_EEPROM_ADDR  0x400  /* EEPROM 存储起始地址
-                                               * 必须避开 QMK/Vial 动态键位映射区域：
-                                               *   动态键位映射起始 ≈ 0x19
-                                               *   动态键位映射大小 = 16层 × 2行 × 4列 × 2字节 = 256字节
-                                               *   动态键位映射结束 ≈ 0x119
-                                               *   后续还有 TapDance/Combo/KeyOverride/Macros 等区域
-                                               * 0x400(1024) 足够靠后，确保不与任何 QMK/Vial 区域重叠 */
+/* The table has its own data flash page outside the QMK area, accessed with EEPROM_READ/ERASE/WRITE.
+ * QMK offset 0x400 (the old place) is inside Vial's dynamic macro buffer. */
+#define BLE_BOND_TABLE_FLASH_ADDR   USER_EEPROM_START_POSITION
+#define BLE_BOND_SAVE_DELAY_MS      2000    /* flash writes wait until pairing has settled */
+#define BLE_SWITCH_RETRY_MS         500     /* re-check a slot change that is still waiting for the stack */
+#define BLE_SWITCH_MAX_RETRIES      5
 #define BLE_RECONNECT_TIMEOUT   30000   /* 回连总超时：30秒（定向广播1.28秒+普通广播约28秒） */
 #define BLE_PAIRING_TIMEOUT     180000  /* 配对超时：3分钟（量产键盘标准） */
 #define BLE_DIRECTED_ADV_TIMEOUT 1500   /* 定向广播协议栈超时1.28秒，留余量1.5秒后转普通广播 */
@@ -57,23 +55,34 @@ typedef struct {
     uint8_t paired;                  /* 是否已配对：0=未配对，1=已配对 */
 } ble_device_info_t;
 
-/* 完整的设备绑定表（存在 EEPROM 里）
- * 同时存储模式记忆，上电时恢复到上次的模式和设备
- */
+/* Complete bond table as stored in data flash. The mode is not stored: the slide switch decides it. */
 typedef struct {
     uint8_t magic;                   /* 魔数 BLE_BOND_TABLE_MAGIC */
     uint8_t current_device;          /* 当前选中的设备槽位（1-3） */
-    uint8_t last_mode_wired;         /* 上次模式：0=蓝牙，1=有线（上电恢复用） */
+    uint8_t snv_erase_pending;       /* the stack's bonds still have to be erased (survives a reset) */
     uint8_t reserved;                /* 保留字节，对齐用 */
     ble_device_info_t devices[BLE_MAX_DEVICES];  /* 3个设备槽位 */
 } ble_bond_table_t;
 
-static ble_bond_table_t bond_table;  /* 内存中的设备绑定表 */
+_Static_assert(sizeof(ble_bond_table_t) <= EEPROM_PAGE_SIZE, "BLE bond table does not fit its page");
+
+static ble_bond_table_t bond_table __attribute__((aligned(4)));  /* 内存中的设备绑定表 */
+static bool bond_table_dirty = false;      /* changed, not yet written to flash */
+static uint32_t bond_table_dirty_time = 0;
 static uint32_t state_enter_time = 0;  /* 进入当前状态的时间（用于超时判断） */
 
 /* 待切换/待配对目标（断开完成后执行）*/
 static uint8_t pending_switch_device = 0;
 static uint8_t pending_pair_device = 0;
+static uint8_t switch_retries = 0;
+
+static bool stack_started = false;  /* GAPROLE_STARTED seen: GAP_ConfigDeviceAddr returns bleNotReady before it */
+static bool adv_active = false;     /* advertising requested or running; cleared by GAPROLE_WAITING */
+
+/* Peer of the current link, goes into the bond table once pairing succeeded */
+static uint8_t conn_peer_addr_type = 0;
+static uint8_t conn_peer_addr[B_ADDR_LEN];
+static bool conn_peer_valid = false;
 
 /* HID 报告去重：上一次成功发送的报告
  * 大连接间隔(500/1000ms)下，矩阵扫描重复生成相同报告，
@@ -93,6 +102,9 @@ static void ble_start_directed_advertising(uint8_t addr_type, uint8_t *bd_addr);
 static void ble_start_general_advertising(void);
 static void ble_check_timeout(void);
 static void ble_set_device_name(uint8_t device_idx);
+static void ble_request_slot(uint8_t device_idx, bool pairing);
+static void ble_run_pending(void);
+static void ble_erase_stack_bonds(void);
 
 /* ========================================================================
  * 广播数据
@@ -115,13 +127,13 @@ static uint8_t advertData[] = {
     HI_UINT16(GAP_APPEARE_HID_KEYBOARD),  /* HID 键盘外观高字节 */
 };
 
-/* 不同槽位不同设备名：CH585_Test_BLE1/2/3 */
+/* One name per slot, as on the stock firmware. Scan response: 2 + 9 (name) + 6 + 6 = 23 of 31 bytes. */
 static void ble_set_device_name(uint8_t device_idx)
 {
     static const char *device_names[BLE_MAX_DEVICES] = {
-        "CH585_Test_BLE1",
-        "CH585_Test_BLE2",
-        "CH585_Test_BLE3",
+        "BNK16 BT1",
+        "BNK16 BT2",
+        "BNK16 BT3",
     };
     if (device_idx < 1 || device_idx > BLE_MAX_DEVICES) {
         return;
@@ -162,7 +174,11 @@ static void ble_set_device_name(uint8_t device_idx)
     GAPRole_SetParameter(GAPROLE_SCAN_RSP_DATA, offset, scan_rsp);
 
     /* 更新 GGS 服务设备名（连接后主机读取到的名字）*/
-    GGS_SetParameter(GGS_DEVICE_NAME_ATT, name_len, (void *)name);
+    {
+        uint8_t gap_name[GAP_DEVICE_NAME_LEN] = {0};
+        memcpy(gap_name, name, name_len);
+        GGS_SetParameter(GGS_DEVICE_NAME_ATT, GAP_DEVICE_NAME_LEN, gap_name);
+    }
 }
 
 /* ========================================================================
@@ -178,30 +194,35 @@ static void ble_set_device_name(uint8_t device_idx)
  *   手机就能正常搜到并配对。这也是量产键盘的标准做法。
  *
  * 静态随机地址要求：
- *   - 第一个字节最高两位必须是 11（0xC0~0xFE，不能是 0xFF）
+ *   - The top two bits of the most significant byte must be 11. The stack keeps addresses LSB first
+ *     (bleConfig_t.MacAddr "little-endian"; SM_CalcRandomAddr sets the address type bits in byte 5),
+ *     so that is the last byte below. The first byte also has them set, so the values are valid
+ *     in either byte order.
  *   - 不能全 0 或全 1
  *   - 每个槽位用一个固定地址，配对信息和地址一一对应
  *
- * 注意：地址必须在断开连接后、启动广播前设置。
- *       在我们的 pending 机制里，GAPROLE_WAITING 执行切换时设置是合适的。
+ * The address is set with no link and no advertising active, before advertising starts, and not before
+ * GAPROLE_STARTED: see ble_request_slot() and ble_run_pending().
  * ======================================================================== */
 
-/* 三个槽位的静态随机地址（第一个字节 0xC1=11000001，最高两位11，符合要求）*/
+/* Static random address of each slot, LSB first; the first and last byte differ per slot */
 static const uint8_t device_addresses[BLE_MAX_DEVICES][B_ADDR_LEN] = {
-    {0xC1, 0x58, 0x35, 0x00, 0x00, 0x01},  /* 设备1 */
-    {0xC1, 0x58, 0x35, 0x00, 0x00, 0x02},  /* 设备2 */
-    {0xC1, 0x58, 0x35, 0x00, 0x00, 0x03},  /* 设备3 */
+    {0xC1, 0x16, 0x85, 0x35, 0x4E, 0xC1},  /* 设备1 */
+    {0xC2, 0x16, 0x85, 0x35, 0x4E, 0xC2},  /* 设备2 */
+    {0xC3, 0x16, 0x85, 0x35, 0x4E, 0xC3},  /* 设备3 */
 };
 
-/* 根据设备槽位设置蓝牙地址（静态随机地址）*/
-static void ble_set_device_address(uint8_t device_idx)
+/* Returns false if the stack refused the address; the caller retries */
+static bool ble_set_device_address(uint8_t device_idx)
 {
+    uint8_t addr[B_ADDR_LEN];
+
     if (device_idx < 1 || device_idx > BLE_MAX_DEVICES) {
-        return;
+        return false;
     }
 
-    /* 设置静态随机地址 — 必须在广播启动前调用 */
-    GAP_ConfigDeviceAddr(ADDRTYPE_STATIC, (uint8_t *)device_addresses[device_idx - 1]);
+    memcpy(addr, device_addresses[device_idx - 1], B_ADDR_LEN);
+    return GAP_ConfigDeviceAddr(ADDRTYPE_STATIC, addr) == SUCCESS;
 }
 
 /* ========================================================================
@@ -267,7 +288,7 @@ void ble_app_init(void)
     /* BLE 协议栈初始化完成提示 — LED0 常亮2s后熄灭 */
     led_set_conn_state(LED_CONN_SUCCESS);
 
-    /* 加载设备绑定表（3个槽位的配对信息 + 模式记忆，存在 EEPROM 里）*/
+    /* Load the bond table (pairing info of the 3 slots and the selected slot) from data flash */
     bond_table_load();
 
     /* 注意：CH58X_BLEInit() 和 HAL_Init() 已经在 platform_setup() 里调用过了，
@@ -290,15 +311,13 @@ void ble_app_init(void)
 
     /* 4. 设置 GAP 外设角色参数 */
     {
-        /* 初始化时不自动广播 — 上电恢复由 ble_restore_last_mode() 处理
-         * 如果上次是蓝牙模式，ble_restore_last_mode() 会调用 ble_switch_device() 启动回连
-         * 如果上次是有线模式，不启动广播
-         */
+        /* No advertising at init: the GAPROLE_STARTED case starts the current slot if the board is
+         * in BT mode. */
         uint8_t initial_advertising_enable = FALSE;
         GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &initial_advertising_enable);
         GAPRole_SetParameter(GAPROLE_ADVERT_DATA, sizeof(advertData), advertData);
-        /* 扫描响应数据和 GGS 设备名由 ble_set_device_name() 动态设置（默认设备1）*/
-        ble_set_device_name(1);
+        /* Scan response and GGS name are set per slot by ble_set_device_name() */
+        ble_set_device_name(bond_table.current_device);
     }
 
     /* 5. GGS 设备名已经在 ble_set_device_name() 里设置了，这里不重复设置 */
@@ -399,16 +418,35 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
 {
     switch (newState & GAPROLE_STATE_ADV_MASK) {
         case GAPROLE_STARTED:
-            /* 协议栈启动完成 — 设置默认设备1的蓝牙地址（静态随机地址）*/
-            ble_set_device_address(1);
+            /* Stack is up: addresses can be set from here on. Runs the current slot, or a slot
+             * requested before this point. In wired mode only the address is set. */
+            stack_started = true;
+            ble_erase_stack_bonds();
+            if (wired_mode_active) {
+                ble_set_device_address(bond_table.current_device);
+            } else {
+                if (pending_switch_device == 0 && pending_pair_device == 0) {
+                    pending_switch_device = bond_table.current_device;
+                }
+                ble_run_pending();
+            }
             break;
 
         case GAPROLE_ADVERTISING:
             /* 正在广播 */
             if (pEvent->gap.opcode == GAP_MAKE_DISCOVERABLE_DONE_EVENT) {
-                current_state = BLE_STATE_ADVERTISING;
-                if (!wired_mode_active) {
-                    led_set_conn_state(LED_CONN_PAIRING);  /* 快闪表示广播中 */
+                adv_active = true;
+                if (wired_mode_active ||
+                    (current_state != BLE_STATE_ADVERTISING &&
+                     current_state != BLE_STATE_RECONNECTING &&
+                     current_state != BLE_STATE_PAIRING)) {
+                    /* Not wanted (wired mode, or stopped while it was starting). The stack only ends
+                     * advertising on an enabled -> disabled change of this flag, and the flag may
+                     * already be off. */
+                    uint8_t enable = TRUE;
+                    GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &enable);
+                    enable = FALSE;
+                    GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &enable);
                 }
             }
             break;
@@ -418,6 +456,16 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
             if (pEvent->gap.opcode == GAP_LINK_ESTABLISHED_EVENT) {
                 gapEstLinkReqEvent_t *event = (gapEstLinkReqEvent_t *)pEvent;
                 conn_handle = event->connectionHandle;
+                adv_active = false;
+
+                /* A host connected just as the board left BT mode or changed slot: drop it */
+                if (wired_mode_active || pending_switch_device != 0 || pending_pair_device != 0) {
+                    current_state = BLE_STATE_SWITCHING;
+                    state_enter_time = timer_read32();
+                    ble_disconnect();
+                    break;
+                }
+
                 current_state = BLE_STATE_CONNECTED;
 
                 /* 重置待重试队列：重新连接后清空旧报告 */
@@ -427,11 +475,11 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
                     led_set_conn_state(LED_CONN_SUCCESS);  /* 常亮2秒表示连接成功，然后自动熄灭 */
                 }
 
-                /* 保存对端 BD_ADDR 到当前设备槽位（用于后续回连）
-                 * 注意：连接成功时就保存，不管配对是否完成。
-                 * 配对完成后协议栈会自动保存密钥，我们只需要 BD_ADDR 用于定向广播回连。
-                 */
-                bond_table_set_device(bond_table.current_device, event->devAddrType, event->devAddr);
+                /* Remember the peer; it goes into the bond table in ble_app_pair_state() once pairing
+                 * succeeded (the slot is not marked paired before that). */
+                conn_peer_addr_type = event->devAddrType;
+                memcpy(conn_peer_addr, event->devAddr, B_ADDR_LEN);
+                conn_peer_valid = true;
 
                 /* 延迟请求更新连接参数（让主机先完成服务发现） */
                 tmos_start_task(ble_task_id, START_PARAM_UPDATE_EVT, 12800);
@@ -443,107 +491,58 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
             break;
 
         case GAPROLE_WAITING:
-            /* 断开连接 / 广播超时
+            /* Link ended or advertising ended. The stack cleared its advertising flag before this
+             * callback, so advertising can be started from here.
              *
-             * 优先级从高到低：
-             * 1. 有待切换目标（pending_switch_device）：断开完成后执行切换
-             * 2. 有待配对目标（pending_pair_device）：断开完成后进入配对模式
-             * 3. 定向广播超时（RECONNECTING + GAP_LINK_ESTABLISHED_EVENT）：转普通广播
-             * 4. 主动切换到回连模式，断开完成（RECONNECTING + GAP_LINK_TERMINATED_EVENT）：重启定向广播
-             * 5. 主动切换到广播模式，断开完成（ADVERTISING）：重启普通广播
-             * 6. 主动切换到配对模式，断开完成（PAIRING）：重启普通广播
-             * 7. 被动断开（CONNECTED）：自动回连当前设备
-             * 8. 主动切换中间态（SWITCHING）：什么都不做
+             * Highest priority first:
+             * 1. wired mode: stay off
+             * 2. a slot change is pending (pending_switch_device, pending_pair_device): run it
+             * 3. RECONNECTING, directed advertising timed out: general advertising for the rest of the
+             *    30 s. The library reports this as opcode GAP_LINK_ESTABLISHED_EVENT with status
+             *    bleGAPConnNotAcceptable; state_enter_time is not touched, the 30 s are the total.
+             * 4. RECONNECTING, a link ended: directed advertising again, same 30 s
+             * 5. ADVERTISING, PAIRING: advertising ended: restart it
+             * 6. CONNECTED: the link dropped: reconnect to the current slot
+             * SWITCHING with nothing pending, IDLE, STANDBY: nothing to do
              */
             conn_handle = GAP_CONNHANDLE_INIT;
+            conn_peer_valid = false;
+            adv_active = false;
 
-            /* 情况1：有待切换目标 — 断开完成后执行切换 */
-            if (pending_switch_device != 0) {
-                uint8_t dev_idx = pending_switch_device;
-                pending_switch_device = 0;
-                pending_pair_device = 0;
+            ble_erase_stack_bonds();
 
-                /* 设置该槽位的蓝牙地址（必须在启动广播前设置）*/
-                ble_set_device_address(dev_idx);
-
-                if (bond_table_is_paired(dev_idx)) {
-                    ble_device_info_t *dev = &bond_table.devices[dev_idx - 1];
-                    ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
-                } else {
-                    current_state = BLE_STATE_ADVERTISING;
-                    state_enter_time = timer_read32();
-                    ble_start_general_advertising();
-                    if (!wired_mode_active) {
-                        led_set_conn_state(LED_CONN_PAIRING);
-                    }
-                }
+            if (wired_mode_active) {
+                /* hiddev.c can re-enable advertising on a failed pairing just before this callback */
+                ble_stop_advertising();
+                current_state = BLE_STATE_IDLE;
                 break;
             }
 
-            /* 情况2：有待配对目标 — 断开完成后进入配对模式 */
-            if (pending_pair_device != 0) {
-                uint8_t dev_idx = pending_pair_device;
-                pending_pair_device = 0;
-                pending_switch_device = 0;
-
-                /* 设置该槽位的蓝牙地址（必须在启动广播前设置）*/
-                ble_set_device_address(dev_idx);
-
-                current_state = BLE_STATE_PAIRING;
-                state_enter_time = timer_read32();
-                ble_start_general_advertising();
-                led_set_conn_state(LED_CONN_PAIRING);
+            if (pending_switch_device != 0 || pending_pair_device != 0) {
+                ble_run_pending();
                 break;
             }
 
-            if (current_state == BLE_STATE_RECONNECTING &&
-                pEvent->gap.opcode == GAP_LINK_ESTABLISHED_EVENT) {
-                /* 情况3：定向广播超时 — 转普通可连接广播继续等（回连第二阶段） */
-                current_state = BLE_STATE_RECONNECTING;
-                state_enter_time = timer_read32();
-                ble_start_general_advertising();
-                if (!wired_mode_active) {
-                    led_set_conn_state(LED_CONN_RECONNECTING);
-                }
-            } else if (current_state == BLE_STATE_RECONNECTING &&
-                       pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
-                /* 回连模式断开完成 — 重启定向广播 */
-                ble_device_info_t *dev = &bond_table.devices[bond_table.current_device - 1];
-                ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
-            } else if (current_state == BLE_STATE_ADVERTISING) {
-                /* 广播模式断开完成 — 重启普通广播 */
-                ble_start_general_advertising();
-                if (!wired_mode_active) {
-                    led_set_conn_state(LED_CONN_PAIRING);
-                }
-            } else if (current_state == BLE_STATE_PAIRING) {
-                /* 配对模式断开完成 — 重启普通广播 */
-                ble_start_general_advertising();
-                if (!wired_mode_active) {
-                    led_set_conn_state(LED_CONN_PAIRING);
-                }
-            } else if (current_state == BLE_STATE_CONNECTED) {
-                /* 情况7：被动断开 — 自动回连当前设备 */
-                /* 设置当前设备的蓝牙地址（确保地址正确）*/
-                ble_set_device_address(bond_table.current_device);
-
-                if (bond_table_is_paired(bond_table.current_device)) {
+            if (current_state == BLE_STATE_RECONNECTING) {
+                if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
                     ble_device_info_t *dev = &bond_table.devices[bond_table.current_device - 1];
                     ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
                 } else {
-                    current_state = BLE_STATE_ADVERTISING;
-                    state_enter_time = timer_read32();
                     ble_start_general_advertising();
-                    if (!wired_mode_active) {
-                        led_set_conn_state(LED_CONN_PAIRING);
-                    }
+                    led_set_conn_state(LED_CONN_RECONNECTING);
                 }
+            } else if (current_state == BLE_STATE_ADVERTISING || current_state == BLE_STATE_PAIRING) {
+                ble_start_general_advertising();
+                led_set_conn_state(LED_CONN_PAIRING);
+            } else if (current_state == BLE_STATE_CONNECTED) {
+                pending_switch_device = bond_table.current_device;
+                ble_run_pending();
             }
-            /* SWITCHING 状态 — 不做处理 */
             break;
 
         case GAPROLE_ERROR:
             /* 错误 */
+            adv_active = false;
             current_state = BLE_STATE_IDLE;
             if (!wired_mode_active) {
                 led_set_conn_state(LED_CONN_IDLE);
@@ -639,6 +638,35 @@ static uint8_t ble_hid_report_cb(uint8_t id, uint8_t type, uint16_t uuid,
  * ======================================================================== */
 
 /* 尝试发送报告，失败时保存到待重试队列 */
+static bool ble_pump_allowed = false;
+
+void ble_qmk_task_running(bool running)
+{
+    ble_pump_allowed = running;
+}
+
+/* QMK blocks in wait_ms() for as long as a macro plays. In BT mode TMOS keeps running meanwhile, or the
+ * link would drop after the supervision timeout. The flag stays off inside TMOS, so a callback never
+ * nests another TMOS_SystemProcess(). */
+void ble_wait_ms(uint32_t ms)
+{
+    if (!ble_pump_allowed || wired_mode_active) {
+        DelayMs(ms);
+        return;
+    }
+
+    uint32_t start = timer_read32();
+    ble_pump_allowed = false;
+    while (timer_elapsed32(start) < ms) {
+        TMOS_SystemProcess();
+#ifdef RGB_MATRIX_ENABLE
+        extern void rgb_matrix_task(void);
+        rgb_matrix_task();
+#endif
+    }
+    ble_pump_allowed = true;
+}
+
 static bool ble_send_report_internal(uint8_t *report)
 {
     if (current_state != BLE_STATE_CONNECTED) {
@@ -660,7 +688,17 @@ void ble_send_keyboard_report(uint8_t modifiers, uint8_t *keys)
         }
     }
 
-    if (!ble_send_report_internal(report)) {
+    /* The stack holds only a few packets per connection event. Give it time to send them, so a macro
+     * does not lose keys; a later report would overwrite the pending one. */
+    uint32_t start = timer_read32();
+    bool sent = ble_send_report_internal(report);
+    while (!sent && ble_pump_allowed && current_state == BLE_STATE_CONNECTED &&
+           timer_elapsed32(start) < BLE_SEND_WAIT_MS) {
+        ble_wait_ms(1);
+        sent = ble_send_report_internal(report);
+    }
+
+    if (!sent) {
         /* 发送失败，保存到待重试队列（覆盖旧的，因为新报告状态最新）*/
         memcpy(pending_report, report, HID_KEYBOARD_IN_RPT_LEN);
         pending_report_valid = true;
@@ -710,9 +748,10 @@ uint16_t ble_get_conn_handle(void)
 
 void ble_start_advertising(void)
 {
-    if (current_state != BLE_STATE_CONNECTED) {
+    if (current_state != BLE_STATE_CONNECTED && !wired_mode_active) {
         uint8_t advertising_enable = TRUE;
         GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &advertising_enable);
+        adv_active = true;
         current_state = BLE_STATE_ADVERTISING;
         led_set_conn_state(LED_CONN_PAIRING);
     }
@@ -728,37 +767,55 @@ void ble_disconnect(void)
 
 /* ========================================================================
  * 三设备切换
- * 绑定表存3个槽位（EEPROM持久化），短按切换/回连，长按配对，BT_CLEAR清除
+ * The table holds 3 slots (kept in data flash). Tap: switch/reconnect, hold: pair, BT_CLEAR: clear.
  * ======================================================================== */
 
 /* ------------------------------------------------------------------------
- * EEPROM 读写 — 设备绑定表持久化
+ * Bond table in its own data flash page
  * ------------------------------------------------------------------------ */
 
-/* 从 EEPROM 加载设备绑定表 */
+static void bond_table_set_empty(void)
+{
+    memset(&bond_table, 0, sizeof(ble_bond_table_t));
+    bond_table.magic = BLE_BOND_TABLE_MAGIC;
+    bond_table.current_device = 1;
+}
+
+/* Load the table; first use or bad contents give an empty table */
 static void bond_table_load(void)
 {
-    uint8_t *p = (uint8_t *)&bond_table;
-    for (uint16_t i = 0; i < sizeof(ble_bond_table_t); i++) {
-        p[i] = eeprom_read_byte(BLE_BOND_TABLE_EEPROM_ADDR + i);
-    }
-    /* 魔数不对说明是第一次使用或数据损坏，初始化空表 */
-    if (bond_table.magic != BLE_BOND_TABLE_MAGIC) {
-        memset(&bond_table, 0, sizeof(ble_bond_table_t));
-        bond_table.magic = BLE_BOND_TABLE_MAGIC;
-        bond_table.current_device = 1;  /* 默认设备1 */
-        bond_table.last_mode_wired = 1; /* 默认有线模式（首次使用时 USB 连接着）*/
+    if (EEPROM_READ(BLE_BOND_TABLE_FLASH_ADDR, &bond_table, sizeof(ble_bond_table_t)) != 0 ||
+        bond_table.magic != BLE_BOND_TABLE_MAGIC ||
+        bond_table.current_device < 1 || bond_table.current_device > BLE_MAX_DEVICES) {
+        bond_table_set_empty();
         bond_table_save();
     }
 }
 
-/* 保存设备绑定表到 EEPROM */
+/* Write the table if the page holds something else; blocks for the page erase and write */
 static void bond_table_save(void)
 {
-    uint8_t *p = (uint8_t *)&bond_table;
-    for (uint16_t i = 0; i < sizeof(ble_bond_table_t); i++) {
-        eeprom_update_byte(BLE_BOND_TABLE_EEPROM_ADDR + i, p[i]);
+    ble_bond_table_t stored __attribute__((aligned(4)));
+
+    bond_table_dirty = false;
+    if (EEPROM_READ(BLE_BOND_TABLE_FLASH_ADDR, &stored, sizeof(ble_bond_table_t)) == 0 &&
+        memcmp(&stored, &bond_table, sizeof(ble_bond_table_t)) == 0) {
+        return;
     }
+    if (EEPROM_ERASE(BLE_BOND_TABLE_FLASH_ADDR, EEPROM_PAGE_SIZE) != 0 ||
+        EEPROM_WRITE(BLE_BOND_TABLE_FLASH_ADDR, &bond_table, sizeof(ble_bond_table_t)) != 0) {
+        /* try again later from ble_app_poll() */
+        bond_table_dirty = true;
+        bond_table_dirty_time = timer_read32();
+    }
+}
+
+/* Save later from ble_app_poll(): callers run during connection setup and pairing, where blocking on
+ * flash could cost connection events. */
+static void bond_table_mark_dirty(void)
+{
+    bond_table_dirty = true;
+    bond_table_dirty_time = timer_read32();
 }
 
 /* 检查指定槽位是否已配对 */
@@ -768,25 +825,49 @@ static bool bond_table_is_paired(uint8_t device_idx)
     return bond_table.devices[device_idx - 1].paired != 0;
 }
 
-/* 保存配对设备的 BD_ADDR 到指定槽位 */
+/* Store the peer in a slot; nothing happens if it is already there */
 static void bond_table_set_device(uint8_t device_idx, uint8_t addr_type, uint8_t *bd_addr)
 {
     if (device_idx < 1 || device_idx > BLE_MAX_DEVICES) return;
     ble_device_info_t *dev = &bond_table.devices[device_idx - 1];
+    if (dev->paired && dev->addr_type == addr_type && memcmp(dev->bd_addr, bd_addr, 6) == 0) {
+        return;
+    }
     dev->addr_type = addr_type;
     memcpy(dev->bd_addr, bd_addr, 6);
     dev->paired = 1;
+    bond_table_mark_dirty();
+}
+
+/* Called from hiddev.c on pairing progress. A bonded host reconnecting reports BONDED, a new one
+ * COMPLETE and then BONDED. */
+void ble_app_pair_state(uint8_t state, uint8_t status)
+{
+    if (status == SUCCESS && conn_peer_valid &&
+        (state == GAPBOND_PAIRING_STATE_COMPLETE || state == GAPBOND_PAIRING_STATE_BONDED)) {
+        bond_table_set_device(bond_table.current_device, conn_peer_addr_type, conn_peer_addr);
+    }
+}
+
+/* Clear all slots. Saved at once, because a factory reset follows immediately. */
+static void bond_table_clear_all(void)
+{
+    bond_table_set_empty();
+    bond_table.snv_erase_pending = 1;
     bond_table_save();
 }
 
-/* 清除所有槽位的配对信息 */
-static void bond_table_clear_all(void)
+/* Erase the stack's bonds if that is pending. Only possible with the stack up and no link, so this is
+ * also called from GAPROLE_STARTED and GAPROLE_WAITING; the pending flag survives a reset. */
+static void ble_erase_stack_bonds(void)
 {
-    for (uint8_t i = 0; i < BLE_MAX_DEVICES; i++) {
-        memset(&bond_table.devices[i], 0, sizeof(ble_device_info_t));
+    if (!bond_table.snv_erase_pending || !stack_started || conn_handle != GAP_CONNHANDLE_INIT) {
+        return;
     }
-    bond_table.current_device = 1;
-    bond_table_save();
+    if (GAPBondMgr_SetParameter(GAPBOND_ERASE_ALLBONDS, 0, NULL) == SUCCESS) {
+        bond_table.snv_erase_pending = 0;
+        bond_table_mark_dirty();
+    }
 }
 
 /* ------------------------------------------------------------------------
@@ -807,9 +888,10 @@ static void ble_start_directed_advertising(uint8_t addr_type, uint8_t *bd_addr)
     /* 开始广播 */
     uint8_t advertising_enable = TRUE;
     GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &advertising_enable);
+    adv_active = true;
 
+    /* state_enter_time is set by ble_run_pending(): the 30 s cover all reconnect phases */
     current_state = BLE_STATE_RECONNECTING;
-    state_enter_time = timer_read32();
     led_set_conn_state(LED_CONN_RECONNECTING);  /* 慢闪表示回连中 */
 }
 
@@ -827,46 +909,46 @@ static void ble_start_general_advertising(void)
     /* 开始广播 */
     uint8_t advertising_enable = TRUE;
     GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &advertising_enable);
+    adv_active = true;
 }
 
 /* ------------------------------------------------------------------------
- * 超时检查 — 在主循环里调用
+ * Timeouts, called from ble_app_poll()
  * ------------------------------------------------------------------------ */
 
 static void ble_check_timeout(void)
 {
     uint32_t now = timer_read32();
 
+    if (wired_mode_active) {
+        return;
+    }
+
     if (current_state == BLE_STATE_RECONNECTING) {
-        /* 回连总超时：30秒没连上（定向广播1.28秒+普通广播约28秒）
-         * 超时后停止广播，进入待机（用户按 BT 键可重新唤醒）
-         */
+        /* 30 s total (directed, then general advertising), then standby: a key press restarts it */
         if (now - state_enter_time > BLE_RECONNECT_TIMEOUT) {
             ble_stop_advertising();
             current_state = BLE_STATE_STANDBY;
-            if (!wired_mode_active) {
+            led_set_conn_state(LED_CONN_IDLE);
+        }
+    } else if (current_state == BLE_STATE_PAIRING) {
+        /* Pairing timeout: back to the old bond of this slot if it has one, else standby */
+        if (now - state_enter_time > BLE_PAIRING_TIMEOUT) {
+            if (bond_table_is_paired(bond_table.current_device)) {
+                ble_request_slot(bond_table.current_device, false);
+            } else {
+                ble_stop_advertising();
+                current_state = BLE_STATE_STANDBY;
                 led_set_conn_state(LED_CONN_IDLE);
             }
         }
-    } else if (current_state == BLE_STATE_PAIRING) {
-        /* 配对超时：3分钟没新设备配对
-         * 退出配对模式：
-         *   当前槽位有旧绑定 → 回连旧设备
-         *   当前槽位无旧绑定 → 进入待机
-         */
-        if (now - state_enter_time > BLE_PAIRING_TIMEOUT) {
-            ble_stop_advertising();
-            if (bond_table_is_paired(bond_table.current_device)) {
-                /* 有旧绑定 → 回连旧设备 */
-                ble_device_info_t *dev = &bond_table.devices[bond_table.current_device - 1];
-                ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
-            } else {
-                /* 无旧绑定 → 待机 */
-                current_state = BLE_STATE_STANDBY;
-                if (!wired_mode_active) {
-                    led_set_conn_state(LED_CONN_IDLE);
-                }
-            }
+    } else if (current_state == BLE_STATE_SWITCHING &&
+               (pending_switch_device != 0 || pending_pair_device != 0)) {
+        /* The stack does not report the end of advertising that had not really started yet, and it
+         * can refuse the address: try again from here. */
+        if (conn_handle == GAP_CONNHANDLE_INIT && stack_started && now - state_enter_time > BLE_SWITCH_RETRY_MS) {
+            adv_active = false;
+            ble_run_pending();
         }
     }
 }
@@ -882,217 +964,169 @@ void ble_stop_advertising(void)
     }
 }
 
-void ble_switch_device(uint8_t device_idx)
+/* Wired mode: BLE off. Called with wired_mode_active already set; a link still going down ends in
+ * GAPROLE_WAITING, which sets IDLE. */
+void ble_radio_off(void)
 {
-    if (device_idx < 1 || device_idx > 3) {
-        return;  /* 只支持设备1/2/3 */
-    }
+    pending_switch_device = 0;
+    pending_pair_device = 0;
+    switch_retries = 0;
 
-    /* 用户主动切换到蓝牙模式，退出有线模式 */
-    wired_mode_active = false;
-    power_set_wired_mode(false);  /* 通知电源管理退出有线模式，无线模式下可以进睡眠 */
-
-    /* 设置当前设备槽位 */
-    bond_table.current_device = device_idx;
-
-    /* 设置该槽位对应的蓝牙设备名（CH585_Test-BLE1/2/3）
-     * 不同槽位不同名字，避免已配对的设备1（电脑）自动连接到设备2的广播
-     */
-    ble_set_device_name(device_idx);
-
-    /* 保存模式记忆：蓝牙模式 + 当前设备 */
-    ble_save_mode(false, device_idx);
-
-    /* LED 提示切换设备 — 暂时用常亮2s代替闪N次 */
-    led_set_conn_state(LED_CONN_SUCCESS);
-
-    if (ble_is_connected()) {
-        /* 已连接 — 先断开，记录 pending 目标，断开完成后再切换 */
-        current_state = BLE_STATE_SWITCHING;
-        pending_switch_device = device_idx;
-        pending_pair_device = 0;
-        ble_disconnect();
-    } else {
-        /* 当前未连接 — 直接执行切换 */
-        pending_switch_device = 0;
-        pending_pair_device = 0;
-
-        /* 设置该槽位的蓝牙地址（必须在启动广播前设置）*/
-        ble_set_device_address(device_idx);
-
-        /* 根据槽位是否有配对信息，决定回连还是广播等待 */
-        if (bond_table_is_paired(device_idx)) {
-            /* 有配对信息 → 定向广播回连（第一阶段，1.28秒超时后自动转普通广播）*/
-            ble_device_info_t *dev = &bond_table.devices[device_idx - 1];
-            ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
-        } else {
-            /* 没有配对信息 → 普通广播等待新设备配对 */
-            current_state = BLE_STATE_ADVERTISING;
-            state_enter_time = timer_read32();
-            ble_start_general_advertising();
-            if (!wired_mode_active) {
-                led_set_conn_state(LED_CONN_PAIRING);  /* 快闪表示广播中 */
-            }
-        }
+    ble_disconnect();
+    ble_stop_advertising();
+    if (conn_handle == GAP_CONNHANDLE_INIT) {
+        current_state = BLE_STATE_IDLE;
     }
 }
 
-void ble_pair_device(uint8_t device_idx)
+/* Start what is pending. Must only run with no link and no advertising active. On a refused address
+ * the target stays pending and ble_check_timeout() tries again. */
+static void ble_run_pending(void)
 {
-    if (device_idx < 1 || device_idx > BLE_MAX_DEVICES) {
+    uint8_t device_idx = pending_switch_device != 0 ? pending_switch_device : pending_pair_device;
+    bool pairing = pending_switch_device == 0;
+
+    if (device_idx == 0) {
         return;
     }
 
-    /* 用户主动进入配对模式，退出有线模式 */
-    wired_mode_active = false;
-    power_set_wired_mode(false);  /* 通知电源管理退出有线模式，无线模式下可以进睡眠 */
-
-    /* 设置当前设备槽位 */
-    bond_table.current_device = device_idx;
-
-    /* 设置该槽位对应的蓝牙设备名（CH585_Test-BLE1/2/3）
-     * 不同槽位不同名字，避免已配对的设备1（电脑）自动连接到设备2的广播
-     */
     ble_set_device_name(device_idx);
+    state_enter_time = timer_read32();
 
-    /* 保存模式记忆：蓝牙模式 + 当前设备 */
-    ble_save_mode(false, device_idx);
-
-    /* 注意：不清除旧绑定！
-     * 配对成功后用新绑定覆盖当前槽位，超时则保持原绑定。
-     * 协议栈的 GAPBondMgr 会处理新配对的密钥交换。
-     */
-
-    if (ble_is_connected()) {
-        /* 当前已连接 — 先只断开连接，记录待配对目标
-         * 等 GAPROLE_WAITING（断开完成事件）触发后再进入配对模式
-         * 避免在断开过程中设置广播参数干扰断开流程
-         */
+    if (!ble_set_device_address(device_idx)) {
         current_state = BLE_STATE_SWITCHING;
-        pending_pair_device = device_idx;
-        pending_switch_device = 0;  /* 清除可能的待切换目标 */
-        ble_disconnect();
+        if (++switch_retries > BLE_SWITCH_MAX_RETRIES) {
+            /* give up: the status LED shows the failure, a key press tries again */
+            pending_switch_device = 0;
+            pending_pair_device = 0;
+            switch_retries = 0;
+            current_state = BLE_STATE_STANDBY;
+        }
+        return;
+    }
+
+    pending_switch_device = 0;
+    pending_pair_device = 0;
+    switch_retries = 0;
+
+    if (!pairing && bond_table_is_paired(device_idx)) {
+        /* directed advertising first; general advertising follows when it times out */
+        ble_device_info_t *dev = &bond_table.devices[device_idx - 1];
+        ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
     } else {
-        /* 当前未连接 — 直接进入配对模式 */
-        pending_switch_device = 0;
-        pending_pair_device = 0;
-
-        /* 设置该槽位的蓝牙地址（必须在启动广播前设置）*/
-        ble_set_device_address(device_idx);
-
-        /* 进入配对模式 — 普通广播，可被新设备搜索到 */
+        /* no bond in this slot, or a pairing hold: open for pairing (an old bond stays until a new
+         * pairing replaces it) */
         current_state = BLE_STATE_PAIRING;
-        state_enter_time = timer_read32();
         ble_start_general_advertising();
-        led_set_conn_state(LED_CONN_PAIRING);  /* 快闪表示配对模式 */
+        led_set_conn_state(LED_CONN_PAIRING);
     }
 }
 
+/* Go to a slot. The address can only change with no link and no advertising, and starting advertising
+ * while it is still ending would be lost, so wait for GAPROLE_WAITING if needed. Before GAPROLE_STARTED
+ * the target just stays pending. */
+static void ble_request_slot(uint8_t device_idx, bool pairing)
+{
+    pending_switch_device = pairing ? 0 : device_idx;
+    pending_pair_device = pairing ? device_idx : 0;
+    switch_retries = 0;
+
+    if (conn_handle != GAP_CONNHANDLE_INIT) {
+        current_state = BLE_STATE_SWITCHING;
+        state_enter_time = timer_read32();
+        ble_disconnect();
+    } else if (adv_active) {
+        uint8_t advertising_enable = FALSE;
+        current_state = BLE_STATE_SWITCHING;
+        state_enter_time = timer_read32();
+        GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &advertising_enable);
+    } else if (stack_started) {
+        ble_run_pending();
+    }
+}
+
+static void ble_select_slot(uint8_t device_idx)
+{
+    if (bond_table.current_device != device_idx) {
+        bond_table.current_device = device_idx;
+        bond_table_mark_dirty();
+    }
+}
+
+/* BT keys and the slide switch; does nothing in the USB position */
+void ble_switch_device(uint8_t device_idx)
+{
+    if (device_idx < 1 || device_idx > BLE_MAX_DEVICES || wired_mode_active) {
+        return;
+    }
+
+    ble_select_slot(device_idx);
+    ble_request_slot(device_idx, false);
+}
+
+/* Pairing hold on a BT key; does nothing in the USB position. The old bond is not cleared: a new pairing
+ * replaces it, a timeout keeps it. */
+void ble_pair_device(uint8_t device_idx)
+{
+    if (device_idx < 1 || device_idx > BLE_MAX_DEVICES || wired_mode_active) {
+        return;
+    }
+
+    ble_select_slot(device_idx);
+    ble_request_slot(device_idx, true);
+}
+
+/* Key press: after a timeout this restarts the current slot */
+void ble_wake_from_standby(void)
+{
+    if (!wired_mode_active && stack_started &&
+        (current_state == BLE_STATE_STANDBY || current_state == BLE_STATE_IDLE)) {
+        ble_switch_device(bond_table.current_device);
+    }
+}
+
+/* Clear all slots and the stack's bonds. The stack erases its bonds only without a link, so with a
+ * link this happens in GAPROLE_WAITING. In BT mode slot 1, now without a bond, then opens for pairing;
+ * in the USB position the radio stays off. */
 void ble_clear_bonds(void)
 {
-    /* 清除协议栈所有绑定信息 */
-    GAPBondMgr_SetParameter(GAPBOND_ERASE_ALLBONDS, 0, NULL);
-
-    /* 清除设备表所有槽位 */
     bond_table_clear_all();
-
-    /* 保存模式记忆：保持当前模式，设备重置为1 */
-    ble_save_mode(wired_mode_active, 1);
-
-    /* 断开当前连接 */
-    if (ble_is_connected()) {
-        current_state = BLE_STATE_SWITCHING;  /* 设中间态，避免 GAPROLE_WAITING 自动回连 */
-        ble_disconnect();
-    }
-
-    /* 停止广播 */
-    ble_stop_advertising();
-
-    /* 进入待机 */
-    current_state = BLE_STATE_STANDBY;
-    if (!wired_mode_active) {
-        led_set_conn_state(LED_CONN_IDLE);
-    }
+    ble_erase_stack_bonds();
+    ble_set_device_name(1);
+    ble_switch_device(1);
 }
 
 /* ========================================================================
- * 模式记忆 — 记住上次使用的模式（有线/蓝牙）和设备槽位
- *
- * 存储在 bond_table 的 last_mode_wired 字段里，和设备绑定表一起持久化。
- * 上电时恢复到上次的模式和设备，蓝牙模式自动回连上次设备。
+ * Slot memory: the selected slot is kept in the bond table. The mode is not
+ * stored, the slide switch decides it.
  * ======================================================================== */
 
-/* 保存当前模式到 EEPROM（切换模式/设备时调用）
- * 参数：wired - true=有线模式，false=蓝牙模式
- *       device - 蓝牙设备槽位（1-3，有线模式时忽略）
- */
-void ble_save_mode(bool wired, uint8_t device)
+uint8_t ble_get_current_device(void)
 {
-    bond_table.last_mode_wired = wired ? 1 : 0;
-    if (device >= 1 && device <= BLE_MAX_DEVICES) {
-        bond_table.current_device = device;
-    }
-    bond_table_save();
+    return bond_table.current_device;
 }
 
-/* 从 EEPROM 读取上次的模式
- * 参数：wired - 输出，true=上次是有线，false=上次是蓝牙
- *       device - 输出，上次的蓝牙设备槽位（1-3）
- */
-void ble_load_mode(bool *wired, uint8_t *device)
-{
-    if (wired != NULL) {
-        *wired = (bond_table.last_mode_wired != 0);
-    }
-    if (device != NULL) {
-        *device = bond_table.current_device;
-        if (*device < 1 || *device > BLE_MAX_DEVICES) {
-            *device = 1;  /* 非法值默认设备1 */
-        }
-    }
-}
-
-/* 上电恢复上次模式 — 在 main 函数初始化完成后调用
- *
- * 恢复逻辑（参考量产键盘）：
- *   上次是有线模式 → 进入有线模式
- *   上次是蓝牙模式 → 切换到上次设备槽位，自动回连
- *
- * 注意：USB 是否连接不影响恢复结果，模式由用户上次选择决定。
- *       用户可以随时手动按 WIRED_MODE 或 BTn 切换。
- */
+/* Called from main after init. Only restores the slot: the stack is not up yet, so the GAPROLE_STARTED
+ * case starts it, if the board is in BT mode. */
 void ble_restore_last_mode(void)
 {
-    bool last_wired;
-    uint8_t last_device;
-
-    ble_load_mode(&last_wired, &last_device);
-
-    if (last_wired) {
-        /* 上次是有线模式 → 进入有线模式
-         * 注意：这里不调用 enter_wired_mode()（那是 ch585_evb.c 里的函数），
-         * 只设置 wired_mode_active 标志，ch585_evb.c 的 housekeeping 会处理 LED。
-         * 实际上 enter_wired_mode() 是外部函数，这里直接调用。
-         */
-        extern void enter_wired_mode(void);
-        enter_wired_mode();
-    } else {
-        /* 上次是蓝牙模式 → 切换到上次设备槽位，自动回连 */
-        ble_switch_device(last_device);
+    ble_set_device_name(bond_table.current_device);
+    if (stack_started && !wired_mode_active) {
+        ble_switch_device(bond_table.current_device);
     }
 }
 
 /* ========================================================================
- * 主循环轮询
+ * Main loop part, called from housekeeping. TMOS itself runs in platform_run().
  * ======================================================================== */
 
 void ble_app_poll(void)
 {
-    /* 处理 BLE 协议栈任务（TMOS 调度器）— 必须在主循环里定期调用 */
-    TMOS_SystemProcess();
-
-    /* 检查回连/配对超时 */
     ble_check_timeout();
+
+    if (bond_table_dirty && timer_read32() - bond_table_dirty_time > BLE_BOND_SAVE_DELAY_MS) {
+        bond_table_save();
+    }
 }
 
 /* ========================================================================
@@ -1115,7 +1149,7 @@ static void ble_send_conn_interval_req(uint16_t min_interval, uint16_t max_inter
     if (current_state != BLE_STATE_CONNECTED) return;
     GAPRole_PeripheralConnParamUpdateReq(conn_handle,
         min_interval, max_interval,
-        BLE_SLAVE_LATENCY, BLE_CONN_TIMEOUT,
+        min_interval == BLE_CONN_INTERVAL_L0_MIN ? BLE_SLAVE_LATENCY : 0, BLE_CONN_TIMEOUT,
         ble_task_id);
     last_param_update_time = timer_read32();
 }

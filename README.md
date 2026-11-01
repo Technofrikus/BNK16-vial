@@ -12,10 +12,11 @@ Based on [NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch585-qmk
 | Media keys, mouse wheel, modifier combos such as `LSA(kc)` | works |
 | RGB with reactive effects, Vial Lighting tab | works |
 | Tap Dance, Combos, macros, settings kept after replug | works |
-| Status LED | works: green = USB, blue = BLE, orange = neither |
+| Status LED | works: layer colour, blue while connecting, red flashes when reconnecting fails |
 | 4-position layer switch | works |
-| Bluetooth, battery, mode switch | not brought up |
-| Haptics | dropped on purpose |
+| Bluetooth and mode switch | typing works, three device slots; media keys not yet |
+| Battery, power saving | not done |
+| Haptics | works: big knob detents, settings on the User tab |
 | `VIAL_INSECURE` | still on: Vial is always unlocked, no unlock combo needed |
 
 ## Requirements
@@ -75,7 +76,7 @@ Default keymap:
 
 | Control | Default |
 |---|---|
-| Keys | Numpad on layer 0; layers 1-3 are transparent |
+| Keys | Numpad on layer 0; Bluetooth devices 1-3 in the top row of layer 3; all other keys on layers 1-3 are `KC_NO`, encoders stay transparent |
 | Small left encoder | Volume, click = Mute |
 | Small right encoder | Page up/down, click = Play/Pause |
 | Big knob | Mouse wheel (no click switch) |

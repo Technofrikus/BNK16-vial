@@ -51,9 +51,6 @@ void enter_wired_mode(void) {
     /* 通知电源管理进入有线模式 — 有线模式不进睡眠 */
     power_set_wired_mode(true);
 
-    /* 保存模式记忆：有线模式 */
-    ble_save_mode(true, 1);
-
     /* 断开蓝牙连接（如果已连接）*/
     if (ble_is_connected()) {
         ble_disconnect();

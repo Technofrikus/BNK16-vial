@@ -22,7 +22,7 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 | Big knob | A = PB8, B = PB9 | No detents, no switch. 20 quadrature cycles per turn, resolution 1, direction hysteresis in `bnk16.c` |
 | WS2812 data | PA10 | TMR1 PWM + DMA. 16 key LEDs (row-major), then 1 status LED (index 16) |
 | LED supply enable | PA11 | High = on |
-| USB/BT slide switch | PB11 | Low = BT position. The switch also cuts battery +. Pull-up is set, the level is not evaluated yet |
+| USB/BT slide switch | PB11 | Mode input, pull-up set. Low = BT position, high = USB position (measured). Read at boot and debounced 50 ms at runtime in `bnk16.c`; it alone decides the mode, also with a USB cable in. The switch also cuts battery + |
 | Haptic motor | PA7 | Found with the pin scan. Low = on (P-FET), rests high. Needs a square wave, steady low does not vibrate it. The firmware uses 128 Hz by default, adjustable from 64 to 256 Hz. The on/off switch is hardware only (GND to the drain of a 3401 P-MOSFET) |
 
 ## Unknown

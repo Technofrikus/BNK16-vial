@@ -27,3 +27,6 @@ set(VIALRGB_ENABLE ON CACHE BOOL "KB" FORCE)
 
 # USB connector is on the HS port; the FS port would claim PB10/PB11 (layer and mode switch)
 add_definitions(-DUSB_PORT_CONFIG=USB_PORT_HIGH_SPEED)
+
+# Up to 3 key reports per BLE connection event (the SDK default is 1)
+add_definitions(-DBLE_TX_NUM_EVENT=3)

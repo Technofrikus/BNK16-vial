@@ -158,6 +158,10 @@ __HIGH_CODE static void platform_run()
 
     /* 处理 BLE 协议栈任务（TMOS 调度器） */
     TMOS_SystemProcess();
+
+    ble_qmk_task_running(true);
+    usb_run_qmk_task();
+    ble_qmk_task_running(false);
 }
 
 const ch582_interface_t ch582_protocol_usb = {

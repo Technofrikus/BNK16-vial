@@ -15,6 +15,7 @@
  */
 #include "config.h"
 #include "devinfoservice.h"
+#include "ble_config.h"
 
 /*********************************************************************
  * MACROS
@@ -96,7 +97,7 @@ static uint8_t devInfoSystemId[DEVINFO_SYSTEM_ID_LEN] = {0, 0, 0, 0, 0, 0, 0, 0}
 
 // Model Number String characteristic
 static uint8_t       devInfoModelNumberProps = GATT_PROP_READ;
-static const uint8_t devInfoModelNumber[] = "Model Number";
+static const uint8_t devInfoModelNumber[] = BLE_MODEL_NUMBER;
 
 // Serial Number String characteristic
 static uint8_t       devInfoSerialNumberProps = GATT_PROP_READ;
@@ -116,7 +117,7 @@ static const uint8_t devInfoSoftwareRev[] = "Software Revision";
 
 // Manufacturer Name String characteristic
 static uint8_t       devInfoMfrNameProps = GATT_PROP_READ;
-static const uint8_t devInfoMfrName[] = "Manufacturer Name";
+static const uint8_t devInfoMfrName[] = BLE_MANUFACTURER_NAME;
 
 // IEEE 11073-20601 Regulatory Certification Data List characteristic
 static uint8_t       devInfo11073CertProps = GATT_PROP_READ;
