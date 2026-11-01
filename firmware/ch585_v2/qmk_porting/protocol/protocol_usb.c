@@ -65,6 +65,16 @@ static void send_nkro(report_nkro_t *report)
 {
     if (wired_mode_active) {
         hid_keyboard_send_report(KEYBOARD_MODE_NKRO, (uint8_t *)report, EXKEY_IN_EP_SIZE);
+    } else {
+        /* The BLE report has 6 keys only: send the first ones, or typing stops with NKRO turned on */
+        uint8_t keys[6] = {0};
+        uint8_t count = 0;
+        for (uint16_t code = 0; code < NKRO_REPORT_BITS * 8 && count < sizeof(keys); code++) {
+            if (report->bits[code / 8] & (1 << (code % 8))) {
+                keys[count++] = code;
+            }
+        }
+        ble_send_keyboard_report(report->mods, keys);
     }
 }
 
@@ -76,6 +86,8 @@ static void send_mouse(report_mouse_t *report)
         report_to_send[0] = REPORT_ID_MOUSE;
         memcpy(report_to_send + 1, report, 5);
         hid_exkey_send_report(report_to_send, 6);
+    } else {
+        ble_send_mouse_report((uint8_t *)report, 5);
     }
 #endif
 }
@@ -84,6 +96,8 @@ static void send_extra(report_extra_t *report)
 {
     if (wired_mode_active) {
         hid_exkey_send_report((uint8_t *)report, sizeof(report_extra_t));
+    } else {
+        ble_send_extra_report(report->report_id, report->usage);
     }
 }
 

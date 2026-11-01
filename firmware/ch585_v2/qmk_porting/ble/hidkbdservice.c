@@ -89,6 +89,7 @@ static const uint8_t hidReportMap[] = {
     0x05, 0x01, // Usage Pg (Generic Desktop)
     0x09, 0x06, // Usage (Keyboard)
     0xA1, 0x01, // Collection: (Application)
+    0x85, HID_RPT_ID_KEY_IN, // Report ID
                 //
     0x05, 0x07, // Usage Pg (Key Codes)
     0x19, 0xE0, // Usage Min (224)
@@ -123,12 +124,71 @@ static const uint8_t hidReportMap[] = {
     0x95, 0x06, // Report Count (6)
     0x75, 0x08, // Report Size (8)
     0x15, 0x00, // Log Min (0)
-    0x25, 0x65, // Log Max (101)
+    0x26, 0xFF, 0x00, // Log Max (255)
     0x05, 0x07, // Usage Pg (Key Codes)
     0x19, 0x00, // Usage Min (0)
-    0x29, 0x65, // Usage Max (101)
+    0x29, 0xFF, // Usage Max (255)
     0x81, 0x00, // Input: (Data, Array)
                 //
+    0xC0,       // End Collection
+
+    // Mouse: buttons, X, Y, wheel, AC pan (same as the USB descriptor)
+    0x05, 0x01, // Usage Pg (Generic Desktop)
+    0x09, 0x02, // Usage (Mouse)
+    0xA1, 0x01, // Collection: (Application)
+    0x85, HID_RPT_ID_MOUSE_IN, // Report ID
+    0x09, 0x01, // Usage (Pointer)
+    0xA1, 0x00, // Collection: (Physical)
+    0x05, 0x09, // Usage Pg (Button)
+    0x19, 0x01, // Usage Min (Button 1)
+    0x29, 0x08, // Usage Max (Button 8)
+    0x15, 0x00, // Log Min (0)
+    0x25, 0x01, // Log Max (1)
+    0x95, 0x08, // Report Count (8)
+    0x75, 0x01, // Report Size (1)
+    0x81, 0x02, // Input: (Data, Variable, Absolute)
+    0x05, 0x01, // Usage Pg (Generic Desktop)
+    0x09, 0x30, // Usage (X)
+    0x09, 0x31, // Usage (Y)
+    0x09, 0x38, // Usage (Wheel)
+    0x15, 0x81, // Log Min (-127)
+    0x25, 0x7F, // Log Max (127)
+    0x95, 0x03, // Report Count (3)
+    0x75, 0x08, // Report Size (8)
+    0x81, 0x06, // Input: (Data, Variable, Relative)
+    0x05, 0x0C, // Usage Pg (Consumer)
+    0x0A, 0x38, 0x02, // Usage (AC Pan)
+    0x95, 0x01, // Report Count (1)
+    0x81, 0x06, // Input: (Data, Variable, Relative)
+    0xC0,       // End Collection
+    0xC0,       // End Collection
+
+    // System control
+    0x05, 0x01, // Usage Pg (Generic Desktop)
+    0x09, 0x80, // Usage (System Control)
+    0xA1, 0x01, // Collection: (Application)
+    0x85, HID_RPT_ID_SYSTEM_IN, // Report ID
+    0x19, 0x01, // Usage Min (1)
+    0x2A, 0xB7, 0x00, // Usage Max (0xB7)
+    0x15, 0x01, // Log Min (1)
+    0x26, 0xB7, 0x00, // Log Max (0xB7)
+    0x95, 0x01, // Report Count (1)
+    0x75, 0x10, // Report Size (16)
+    0x81, 0x00, // Input: (Data, Array)
+    0xC0,       // End Collection
+
+    // Consumer (media keys)
+    0x05, 0x0C, // Usage Pg (Consumer)
+    0x09, 0x01, // Usage (Consumer Control)
+    0xA1, 0x01, // Collection: (Application)
+    0x85, HID_RPT_ID_CONSUMER_IN, // Report ID
+    0x19, 0x01, // Usage Min (1)
+    0x2A, 0xA0, 0x02, // Usage Max (0x2A0)
+    0x15, 0x01, // Log Min (1)
+    0x26, 0xA0, 0x02, // Log Max (0x2A0)
+    0x95, 0x01, // Report Count (1)
+    0x75, 0x10, // Report Size (16)
+    0x81, 0x00, // Input: (Data, Array)
     0xC0        // End Collection
 };
 
@@ -192,13 +252,26 @@ static gattCharCfg_t hidReportBootKeyInClientCharCfg[GATT_MAX_NUM_CONN];
 static uint8_t hidReportBootKeyOutProps = GATT_PROP_READ | GATT_PROP_WRITE | GATT_PROP_WRITE_NO_RSP;
 static uint8_t hidReportBootKeyOut;
 
-// Feature Report
-static uint8_t hidReportFeatureProps = GATT_PROP_READ | GATT_PROP_WRITE;
-static uint8_t hidReportFeature;
+// HID Report characteristic, mouse input
+static uint8_t       hidReportMouseInProps = GATT_PROP_READ | GATT_PROP_NOTIFY;
+static uint8_t       hidReportMouseIn;
+static gattCharCfg_t hidReportMouseInClientCharCfg[GATT_MAX_NUM_CONN];
+static uint8_t       hidReportRefMouseIn[HID_REPORT_REF_LEN] =
+    {HID_RPT_ID_MOUSE_IN, HID_REPORT_TYPE_INPUT};
 
-// HID Report Reference characteristic descriptor, Feature
-static uint8_t hidReportRefFeature[HID_REPORT_REF_LEN] =
-    {HID_RPT_ID_FEATURE, HID_REPORT_TYPE_FEATURE};
+// HID Report characteristic, system control input
+static uint8_t       hidReportSystemInProps = GATT_PROP_READ | GATT_PROP_NOTIFY;
+static uint8_t       hidReportSystemIn;
+static gattCharCfg_t hidReportSystemInClientCharCfg[GATT_MAX_NUM_CONN];
+static uint8_t       hidReportRefSystemIn[HID_REPORT_REF_LEN] =
+    {HID_RPT_ID_SYSTEM_IN, HID_REPORT_TYPE_INPUT};
+
+// HID Report characteristic, consumer input
+static uint8_t       hidReportConsumerInProps = GATT_PROP_READ | GATT_PROP_NOTIFY;
+static uint8_t       hidReportConsumerIn;
+static gattCharCfg_t hidReportConsumerInClientCharCfg[GATT_MAX_NUM_CONN];
+static uint8_t       hidReportRefConsumerIn[HID_REPORT_REF_LEN] =
+    {HID_RPT_ID_CONSUMER_IN, HID_REPORT_TYPE_INPUT};
 
 /*********************************************************************
  * Profile Attributes - Table
@@ -369,26 +442,89 @@ static gattAttribute_t hidAttrTbl[] = {
         0,
         &hidReportBootKeyOut},
 
-    // Feature Report declaration
+    // HID Report characteristic, mouse input declaration
     {
         {ATT_BT_UUID_SIZE, characterUUID},
         GATT_PERMIT_READ,
         0,
-        &hidReportFeatureProps},
+        &hidReportMouseInProps},
 
-    // Feature Report
+    // HID Report characteristic, mouse input
     {
         {ATT_BT_UUID_SIZE, hidReportUUID},
-        GATT_PERMIT_ENCRYPT_READ | GATT_PERMIT_ENCRYPT_WRITE,
+        GATT_PERMIT_ENCRYPT_READ,
         0,
-        &hidReportFeature},
+        &hidReportMouseIn},
 
-    // HID Report Reference characteristic descriptor, feature
+    // HID Report characteristic client characteristic configuration
+    {
+        {ATT_BT_UUID_SIZE, clientCharCfgUUID},
+        GATT_PERMIT_READ | GATT_PERMIT_ENCRYPT_WRITE,
+        0,
+        (uint8_t *)&hidReportMouseInClientCharCfg},
+
+    // HID Report Reference characteristic descriptor, mouse input
     {
         {ATT_BT_UUID_SIZE, reportRefUUID},
         GATT_PERMIT_READ,
         0,
-        hidReportRefFeature},
+        hidReportRefMouseIn},
+
+    // HID Report characteristic, system control input declaration
+    {
+        {ATT_BT_UUID_SIZE, characterUUID},
+        GATT_PERMIT_READ,
+        0,
+        &hidReportSystemInProps},
+
+    // HID Report characteristic, system control input
+    {
+        {ATT_BT_UUID_SIZE, hidReportUUID},
+        GATT_PERMIT_ENCRYPT_READ,
+        0,
+        &hidReportSystemIn},
+
+    // HID Report characteristic client characteristic configuration
+    {
+        {ATT_BT_UUID_SIZE, clientCharCfgUUID},
+        GATT_PERMIT_READ | GATT_PERMIT_ENCRYPT_WRITE,
+        0,
+        (uint8_t *)&hidReportSystemInClientCharCfg},
+
+    // HID Report Reference characteristic descriptor, system control input
+    {
+        {ATT_BT_UUID_SIZE, reportRefUUID},
+        GATT_PERMIT_READ,
+        0,
+        hidReportRefSystemIn},
+
+    // HID Report characteristic, consumer input declaration
+    {
+        {ATT_BT_UUID_SIZE, characterUUID},
+        GATT_PERMIT_READ,
+        0,
+        &hidReportConsumerInProps},
+
+    // HID Report characteristic, consumer input
+    {
+        {ATT_BT_UUID_SIZE, hidReportUUID},
+        GATT_PERMIT_ENCRYPT_READ,
+        0,
+        &hidReportConsumerIn},
+
+    // HID Report characteristic client characteristic configuration
+    {
+        {ATT_BT_UUID_SIZE, clientCharCfgUUID},
+        GATT_PERMIT_READ | GATT_PERMIT_ENCRYPT_WRITE,
+        0,
+        (uint8_t *)&hidReportConsumerInClientCharCfg},
+
+    // HID Report Reference characteristic descriptor, consumer input
+    {
+        {ATT_BT_UUID_SIZE, reportRefUUID},
+        GATT_PERMIT_READ,
+        0,
+        hidReportRefConsumerIn},
 };
 
 // Attribute index enumeration-- these indexes match array elements above
@@ -417,9 +553,18 @@ enum
     HID_BOOT_KEY_IN_CCCD_IDX,    // HID Boot Keyboard Input Report characteristic client characteristic configuration
     HID_BOOT_KEY_OUT_DECL_IDX,   // HID Boot Keyboard Output Report declaration
     HID_BOOT_KEY_OUT_IDX,        // HID Boot Keyboard Output Report
-    HID_FEATURE_DECL_IDX,        // Feature Report declaration
-    HID_FEATURE_IDX,             // Feature Report
-    HID_REPORT_REF_FEATURE_IDX   // HID Report Reference characteristic descriptor, feature
+    HID_REPORT_MOUSE_IN_DECL_IDX,    // HID Report characteristic, mouse input declaration
+    HID_REPORT_MOUSE_IN_IDX,         // HID Report characteristic, mouse input
+    HID_REPORT_MOUSE_IN_CCCD_IDX,    // HID Report characteristic client characteristic configuration
+    HID_REPORT_REF_MOUSE_IN_IDX,     // HID Report Reference characteristic descriptor, mouse input
+    HID_REPORT_SYSTEM_IN_DECL_IDX,   // HID Report characteristic, system control input declaration
+    HID_REPORT_SYSTEM_IN_IDX,        // HID Report characteristic, system control input
+    HID_REPORT_SYSTEM_IN_CCCD_IDX,   // HID Report characteristic client characteristic configuration
+    HID_REPORT_REF_SYSTEM_IN_IDX,    // HID Report Reference characteristic descriptor, system control input
+    HID_REPORT_CONSUMER_IN_DECL_IDX, // HID Report characteristic, consumer input declaration
+    HID_REPORT_CONSUMER_IN_IDX,      // HID Report characteristic, consumer input
+    HID_REPORT_CONSUMER_IN_CCCD_IDX, // HID Report characteristic client characteristic configuration
+    HID_REPORT_REF_CONSUMER_IN_IDX   // HID Report Reference characteristic descriptor, consumer input
 };
 
 /*********************************************************************
@@ -456,6 +601,9 @@ bStatus_t Hid_AddService(void)
     // Initialize Client Characteristic Configuration attributes
     GATTServApp_InitCharCfg(INVALID_CONNHANDLE, hidReportKeyInClientCharCfg);
     GATTServApp_InitCharCfg(INVALID_CONNHANDLE, hidReportBootKeyInClientCharCfg);
+    GATTServApp_InitCharCfg(INVALID_CONNHANDLE, hidReportMouseInClientCharCfg);
+    GATTServApp_InitCharCfg(INVALID_CONNHANDLE, hidReportSystemInClientCharCfg);
+    GATTServApp_InitCharCfg(INVALID_CONNHANDLE, hidReportConsumerInClientCharCfg);
 
     // Register GATT attribute list and CBs with GATT Server App
     status = GATTServApp_RegisterService(hidAttrTbl, GATT_NUM_ATTRS(hidAttrTbl), GATT_MAX_ENCRYPT_KEY_SIZE, &hidKbdCBs);
@@ -497,15 +645,29 @@ bStatus_t Hid_AddService(void)
     hidRptMap[3].cccdHandle = 0;
     hidRptMap[3].mode = HID_PROTOCOL_MODE_BOOT;
 
-    // Feature report
-    hidRptMap[4].id = hidReportRefFeature[0];
-    hidRptMap[4].type = hidReportRefFeature[1];
-    hidRptMap[4].handle = hidAttrTbl[HID_FEATURE_IDX].handle;
-    hidRptMap[4].cccdHandle = 0;
+    // Mouse input report
+    hidRptMap[4].id = hidReportRefMouseIn[0];
+    hidRptMap[4].type = hidReportRefMouseIn[1];
+    hidRptMap[4].handle = hidAttrTbl[HID_REPORT_MOUSE_IN_IDX].handle;
+    hidRptMap[4].cccdHandle = hidAttrTbl[HID_REPORT_MOUSE_IN_CCCD_IDX].handle;
     hidRptMap[4].mode = HID_PROTOCOL_MODE_REPORT;
 
+    // System control input report
+    hidRptMap[5].id = hidReportRefSystemIn[0];
+    hidRptMap[5].type = hidReportRefSystemIn[1];
+    hidRptMap[5].handle = hidAttrTbl[HID_REPORT_SYSTEM_IN_IDX].handle;
+    hidRptMap[5].cccdHandle = hidAttrTbl[HID_REPORT_SYSTEM_IN_CCCD_IDX].handle;
+    hidRptMap[5].mode = HID_PROTOCOL_MODE_REPORT;
+
+    // Consumer input report
+    hidRptMap[6].id = hidReportRefConsumerIn[0];
+    hidRptMap[6].type = hidReportRefConsumerIn[1];
+    hidRptMap[6].handle = hidAttrTbl[HID_REPORT_CONSUMER_IN_IDX].handle;
+    hidRptMap[6].cccdHandle = hidAttrTbl[HID_REPORT_CONSUMER_IN_CCCD_IDX].handle;
+    hidRptMap[6].mode = HID_PROTOCOL_MODE_REPORT;
+
     // Battery level input report
-    Batt_GetParameter(BATT_PARAM_BATT_LEVEL_IN_REPORT, &(hidRptMap[5]));
+    Batt_GetParameter(BATT_PARAM_BATT_LEVEL_IN_REPORT, &(hidRptMap[7]));
 
     // Setup report ID map
     HidDev_RegisterReports(HID_NUM_REPORTS, hidRptMap);
@@ -541,17 +703,6 @@ uint8_t Hid_SetParameter(uint8_t id, uint8_t type, uint16_t uuid, uint8_t len, v
                 if(len == 1)
                 {
                     hidReportLedOut = *((uint8_t *)pValue);
-                }
-                else
-                {
-                    ret = ATT_ERR_INVALID_VALUE_SIZE;
-                }
-            }
-            else if(type == HID_REPORT_TYPE_FEATURE)
-            {
-                if(len == 1)
-                {
-                    hidReportFeature = *((uint8_t *)pValue);
                 }
                 else
                 {
@@ -607,11 +758,6 @@ uint8_t Hid_GetParameter(uint8_t id, uint8_t type, uint16_t uuid, uint16_t *pLen
             if(type == HID_REPORT_TYPE_OUTPUT)
             {
                 *((uint8_t *)pValue) = hidReportLedOut;
-                *pLen = 1;
-            }
-            else if(type == HID_REPORT_TYPE_FEATURE)
-            {
-                *((uint8_t *)pValue) = hidReportFeature;
                 *pLen = 1;
             }
             else

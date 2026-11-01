@@ -51,6 +51,12 @@ void ble_app_pair_state(uint8_t state, uint8_t status);
  */
 void ble_send_keyboard_report(uint8_t modifiers, uint8_t *keys);
 
+/* Mouse report without ID: buttons, X, Y, wheel, AC pan */
+void ble_send_mouse_report(uint8_t *report, uint8_t len);
+
+/* System control or consumer report, report_id is HID_RPT_ID_SYSTEM_IN or HID_RPT_ID_CONSUMER_IN */
+void ble_send_extra_report(uint8_t report_id, uint16_t usage);
+
 /* wait_ms() keeps BLE running only while the QMK task runs in the main loop */
 void ble_qmk_task_running(bool running);
 void ble_wait_ms(uint32_t ms);

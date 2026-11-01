@@ -92,6 +92,22 @@ static bool conn_peer_valid = false;
 static uint8_t pending_report[HID_KEYBOARD_IN_RPT_LEN] = {0};
 static bool pending_report_valid = false;
 
+/* Mouse, system and consumer reports are retried the same way, one slot per report ID */
+#define BLE_EXTRA_RPT_MAX_LEN   5
+typedef struct {
+    uint8_t id;
+    uint8_t len;
+    bool valid;
+    uint8_t data[BLE_EXTRA_RPT_MAX_LEN];
+} ble_pending_extra_t;
+
+static ble_pending_extra_t pending_extra[] = {
+    {.id = HID_RPT_ID_MOUSE_IN},
+    {.id = HID_RPT_ID_SYSTEM_IN},
+    {.id = HID_RPT_ID_CONSUMER_IN},
+};
+#define BLE_PENDING_EXTRA_COUNT (sizeof(pending_extra) / sizeof(pending_extra[0]))
+
 /* 前向声明 */
 static void bond_table_load(void);
 static void bond_table_save(void);
@@ -470,6 +486,9 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
 
                 /* 重置待重试队列：重新连接后清空旧报告 */
                 pending_report_valid = false;
+                for (uint8_t i = 0; i < BLE_PENDING_EXTRA_COUNT; i++) {
+                    pending_extra[i].valid = false;
+                }
 
                 if (!wired_mode_active) {
                     led_set_conn_state(LED_CONN_SUCCESS);  /* 常亮2秒表示连接成功，然后自动熄灭 */
@@ -718,12 +737,65 @@ void ble_send_keyboard_release(void)
     }
 }
 
+static bool ble_send_extra_internal(uint8_t id, uint8_t len, uint8_t *data)
+{
+    if (current_state != BLE_STATE_CONNECTED) {
+        return false;
+    }
+
+    return HidDev_Report(id, HID_REPORT_TYPE_INPUT, len, data) == SUCCESS;
+}
+
+static void ble_send_extra(uint8_t id, uint8_t len, uint8_t *data)
+{
+    ble_pending_extra_t *slot = NULL;
+    for (uint8_t i = 0; i < BLE_PENDING_EXTRA_COUNT; i++) {
+        if (pending_extra[i].id == id) {
+            slot = &pending_extra[i];
+        }
+    }
+    if (slot == NULL || len > BLE_EXTRA_RPT_MAX_LEN) {
+        return;
+    }
+
+    uint32_t start = timer_read32();
+    bool sent = ble_send_extra_internal(id, len, data);
+    while (!sent && ble_pump_allowed && current_state == BLE_STATE_CONNECTED &&
+           timer_elapsed32(start) < BLE_SEND_WAIT_MS) {
+        ble_wait_ms(1);
+        sent = ble_send_extra_internal(id, len, data);
+    }
+
+    slot->valid = !sent;
+    if (!sent) {
+        slot->len = len;
+        memcpy(slot->data, data, len);
+    }
+}
+
+void ble_send_mouse_report(uint8_t *report, uint8_t len)
+{
+    ble_send_extra(HID_RPT_ID_MOUSE_IN, len, report);
+}
+
+void ble_send_extra_report(uint8_t report_id, uint16_t usage)
+{
+    uint8_t report[2] = {LO_UINT16(usage), HI_UINT16(usage)};
+    ble_send_extra(report_id, sizeof(report), report);
+}
+
 /* 主循环里调用：重试待发送的报告 */
 void ble_retry_pending_report(void)
 {
-    if (!pending_report_valid) return;
-    if (ble_send_report_internal(pending_report)) {
+    if (pending_report_valid && ble_send_report_internal(pending_report)) {
         pending_report_valid = false;
+    }
+
+    for (uint8_t i = 0; i < BLE_PENDING_EXTRA_COUNT; i++) {
+        ble_pending_extra_t *slot = &pending_extra[i];
+        if (slot->valid && ble_send_extra_internal(slot->id, slot->len, slot->data)) {
+            slot->valid = false;
+        }
     }
 }
 
