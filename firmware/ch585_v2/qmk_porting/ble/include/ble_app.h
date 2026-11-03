@@ -67,6 +67,18 @@ void ble_send_keyboard_release(void);
 /* 重试待发送的HID报告（主循环里调用）*/
 void ble_retry_pending_report(void);
 
+/* What was asked of the host and what the link really uses, for BNK16_INTERVAL_DEBUG. Units as in BLE. */
+typedef struct {
+    uint16_t requests;
+    uint16_t requested_max;
+    uint8_t request_status;
+    uint16_t updates;
+    uint16_t interval;
+    uint16_t latency;
+    uint16_t timeout;
+} ble_conn_debug_t;
+extern ble_conn_debug_t ble_conn_debug;
+
 /* 获取当前 BLE 连接状态 */
 ble_state_t ble_get_state(void);
 

@@ -139,3 +139,7 @@
  * pin scan drives each free pin in turn, switch probe reports every pin state change. */
 // #define BNK16_PIN_SCAN
 // #define BNK16_SWITCH_PROBE
+// #define BNK16_INTERVAL_DEBUG /* types what the BLE link really uses after each wake-up, see bnk16_diag.c */
+// #define BNK16_POWER_DIAG /* asleep: knob timer slowed to 250 Hz after the KNOB time, chip off after the OFF time, see power_management.c */
+#define BNK16_POWER_DIAG_KNOB_TIME (2 * 60 * 1000) /* 250 Hz loses the key that wakes the board, so not used outside the diagnostic */
+#define BNK16_POWER_DIAG_OFF_TIME  (3 * 60 * 1000) /* chip off, no wake-up: measured 92 uA for the board */

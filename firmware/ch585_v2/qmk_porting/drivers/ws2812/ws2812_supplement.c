@@ -18,6 +18,21 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "ws2812_supplement.h"
 
 static bool ws2812_powered_on = false;
+static bool ws2812_power_blocked = false;
+
+/* While blocked the supply stays off and ws2812_flush() sends nothing */
+void ws2812_power_block(bool block)
+{
+    ws2812_power_blocked = block;
+    if (block) {
+        ws2812_power_toggle(false);
+    }
+}
+
+bool ws2812_power_is_blocked()
+{
+    return ws2812_power_blocked;
+}
 
 bool ws2812_power_get()
 {

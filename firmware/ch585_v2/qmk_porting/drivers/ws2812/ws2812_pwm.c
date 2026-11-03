@@ -365,6 +365,10 @@ void ws2812_set_color_all(uint8_t red, uint8_t green, uint8_t blue)
 
 void ws2812_flush(void)
 {
+    if (ws2812_power_is_blocked()) {
+        return;
+    }
+
     if (!ws2812_power_get()) {
         ws2812_power_toggle(true);
     }

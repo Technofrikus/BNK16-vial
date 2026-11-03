@@ -108,6 +108,10 @@ static ble_pending_extra_t pending_extra[] = {
 };
 #define BLE_PENDING_EXTRA_COUNT (sizeof(pending_extra) / sizeof(pending_extra[0]))
 
+/* Connection interval state, see the end of this file */
+static uint8_t current_interval_level;
+static uint32_t last_param_update_time;
+
 /* 前向声明 */
 static void bond_table_load(void);
 static void bond_table_save(void);
@@ -404,6 +408,9 @@ static uint16_t ble_process_event(uint8_t task_id, uint16_t events)
                 BLE_SLAVE_LATENCY,
                 BLE_CONN_TIMEOUT,
                 ble_task_id);
+            /* this asks for the fast level, so power_task() can move on from there if the board is asleep */
+            current_interval_level = 0;
+            last_param_update_time = timer_read32();
         }
         return (events ^ START_PARAM_UPDATE_EVT);
     }
@@ -1215,15 +1222,37 @@ static uint32_t last_param_update_time = 0;
 /* 防抖最小间隔：两次请求至少间隔5秒 */
 #define PARAM_UPDATE_MIN_INTERVAL_MS  5000
 
+ble_conn_debug_t ble_conn_debug;
+
+/* Called when the link really changed, from the stack's parameter update callback */
+void ble_note_conn_update(uint16_t interval, uint16_t latency, uint16_t timeout)
+{
+    ble_conn_debug.updates++;
+    ble_conn_debug.interval = interval;
+    ble_conn_debug.latency = latency;
+    ble_conn_debug.timeout = timeout;
+}
+
 /* 核心：发送连接间隔更新请求 */
 static void ble_send_conn_interval_req(uint16_t min_interval, uint16_t max_interval)
 {
     if (current_state != BLE_STATE_CONNECTED) return;
-    GAPRole_PeripheralConnParamUpdateReq(conn_handle,
+    ble_conn_debug.request_status = GAPRole_PeripheralConnParamUpdateReq(conn_handle,
         min_interval, max_interval,
         min_interval == BLE_CONN_INTERVAL_L0_MIN ? BLE_SLAVE_LATENCY : 0, BLE_CONN_TIMEOUT,
         ble_task_id);
+    ble_conn_debug.requests++;
+    ble_conn_debug.requested_max = max_interval;
     last_param_update_time = timer_read32();
+}
+
+static void ble_send_conn_level_req(uint8_t level)
+{
+    switch (level) {
+        case 0: ble_send_conn_interval_req(BLE_CONN_INTERVAL_L0_MIN, BLE_CONN_INTERVAL_L0_MAX); break;
+        default: ble_send_conn_interval_req(BLE_CONN_INTERVAL_L1_MIN, BLE_CONN_INTERVAL_L1_MAX); break;
+    }
+    current_interval_level = level;
 }
 
 /* 请求切换连接间隔档位（带5秒防抖）*/
@@ -1244,17 +1273,7 @@ void ble_request_conn_interval(uint8_t level)
         return;
     }
 
-    uint16_t min_interval, max_interval;
-    switch (level) {
-        case 0: min_interval = BLE_CONN_INTERVAL_L0_MIN; max_interval = BLE_CONN_INTERVAL_L0_MAX; break;
-        case 1: min_interval = BLE_CONN_INTERVAL_L1_MIN; max_interval = BLE_CONN_INTERVAL_L1_MAX; break;
-        case 2: min_interval = BLE_CONN_INTERVAL_L2_MIN; max_interval = BLE_CONN_INTERVAL_L2_MAX; break;
-        case 3:
-        default: min_interval = BLE_CONN_INTERVAL_L3_MIN; max_interval = BLE_CONN_INTERVAL_L3_MAX; break;
-    }
-
-    ble_send_conn_interval_req(min_interval, max_interval);
-    current_interval_level = level;
+    ble_send_conn_level_req(level);
 }
 
 /* 强制切换连接间隔档位（绕过5秒防抖，用于携带模式切换）*/
@@ -1263,17 +1282,7 @@ void ble_request_conn_interval_force(uint8_t level)
     if (level >= BLE_CONN_INTERVAL_LEVELS) return;
     if (level == current_interval_level) return;
 
-    uint16_t min_interval, max_interval;
-    switch (level) {
-        case 0: min_interval = BLE_CONN_INTERVAL_L0_MIN; max_interval = BLE_CONN_INTERVAL_L0_MAX; break;
-        case 1: min_interval = BLE_CONN_INTERVAL_L1_MIN; max_interval = BLE_CONN_INTERVAL_L1_MAX; break;
-        case 2: min_interval = BLE_CONN_INTERVAL_L2_MIN; max_interval = BLE_CONN_INTERVAL_L2_MAX; break;
-        case 3:
-        default: min_interval = BLE_CONN_INTERVAL_L3_MIN; max_interval = BLE_CONN_INTERVAL_L3_MAX; break;
-    }
-
-    ble_send_conn_interval_req(min_interval, max_interval);
-    current_interval_level = level;
+    ble_send_conn_level_req(level);
 }
 
 /* 直接设置连接间隔（单位1.25ms，用于携带模式2000ms=1600）*/

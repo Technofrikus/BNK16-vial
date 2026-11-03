@@ -43,29 +43,21 @@
 
 /* ========================================================================
  * 阶梯式连接间隔（睡眠时动态调整）
- * 档位0~3 对应 15/300/500/1000ms
- * 时间阈值：0~30/30~90/90~180/180+分钟
- * 连接间隔单位：1.25ms（15ms=12, 300ms=240, 500ms=400, 1000ms=800）
+ * Levels 0-1 = fast, slow. Units of 1.25 ms. A slower step was tried: at 1 s the press and release of
+ * the first key after waking arrive up to 1 s apart (the host auto-repeats) and reports were lost, while
+ * the battery current did not change. Above 15 ms min and max differ by at least 15 ms,
+ * as Apple's accessory guidelines ask; a host may otherwise refuse the request.
  * ======================================================================== */
 
-/* 档位数量 */
-#define BLE_CONN_INTERVAL_LEVELS    4
+#define BLE_CONN_INTERVAL_LEVELS    2
 
-/* 各档位的最小/最大连接间隔（单位：1.25ms）*/
-#define BLE_CONN_INTERVAL_L0_MIN    12    /* 15ms */
+#define BLE_CONN_INTERVAL_L0_MIN    12    /* 15 ms */
 #define BLE_CONN_INTERVAL_L0_MAX    12
-#define BLE_CONN_INTERVAL_L1_MIN    240   /* 300ms */
-#define BLE_CONN_INTERVAL_L1_MAX    240
-#define BLE_CONN_INTERVAL_L2_MIN    400   /* 500ms */
-#define BLE_CONN_INTERVAL_L2_MAX    400
-#define BLE_CONN_INTERVAL_L3_MIN    800   /* 1000ms */
-#define BLE_CONN_INTERVAL_L3_MAX    800
+#define BLE_CONN_INTERVAL_L1_MIN    80    /* 100-120 ms */
+#define BLE_CONN_INTERVAL_L1_MAX    96
 
-/* 各档位的睡眠时长阈值（毫秒）— 达到此时长切换到对应档位 */
-#define BLE_CONN_INTERVAL_L0_TIME   (30 * 60 * 1000)   /* 30分钟 */
-#define BLE_CONN_INTERVAL_L1_TIME   (90 * 60 * 1000)   /* 90分钟 */
-#define BLE_CONN_INTERVAL_L2_TIME   (180 * 60 * 1000)  /* 180分钟 */
-/* L3 是 L2_TIME 以上，不需要额外阈值 */
+/* Time asleep before the level is used, ms (10 min after the last key with the 5 min sleep timeout) */
+#define BLE_CONN_INTERVAL_L1_TIME   (5 * 60 * 1000)
 
 /* 兼容旧代码：日常模式用档位0（15ms）*/
 #define BLE_MIN_CONN_INTERVAL       BLE_CONN_INTERVAL_L0_MIN

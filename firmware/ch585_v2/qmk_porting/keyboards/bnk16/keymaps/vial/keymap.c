@@ -21,6 +21,7 @@
 #include "ble_app.h"
 #include "eeconfig.h"
 #include "power_management.h"
+#include "bnk16_diag.h"
 
 enum custom_keycodes {
     BT_1 = QK_USER_0,
@@ -155,6 +156,9 @@ uint8_t bnk16_keycode_bt_device(uint16_t keycode) {
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
+#ifdef BNK16_INTERVAL_DEBUG
+        bnk16_diag_note_key();
+#endif
         power_notify_activity();
     }
 

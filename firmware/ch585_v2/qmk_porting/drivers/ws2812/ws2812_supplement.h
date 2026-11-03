@@ -27,3 +27,5 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 void ws2812_power_toggle(bool status);
 bool ws2812_power_get();
+void ws2812_power_block(bool block);
+bool ws2812_power_is_blocked();

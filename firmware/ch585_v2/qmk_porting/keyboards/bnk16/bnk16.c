@@ -18,6 +18,7 @@
 #include "power_management.h"
 #include "battery.h"
 #include "bnk16_diag.h"
+#include "ws2812_supplement.h"
 #include "CH58x_common.h"
 
 /* ========================================================================
@@ -240,6 +241,7 @@ static void status_led_task(void) {
 
     if (sleeping != last_sleeping) {
         rgb_matrix_set_suspend_state(sleeping);
+        ws2812_power_block(sleeping); /* black LEDs still draw current, so cut their supply */
     }
     if (layer != last_layer || usb != last_usb || (last_sleeping && !sleeping)) {
         status_layer_start = timer_read32();
@@ -660,6 +662,13 @@ __INTERRUPT __HIGH_CODE void TMR2_IRQHandler(void) {
         }
     }
 }
+
+#ifdef BNK16_POWER_DIAG
+/* Knob sampling at 4 kHz or 250 Hz. Not stopped: its interrupt is what wakes the main loop from WFI */
+void bnk16_knob_timer(bool fast) {
+    TMR2_TimerInit(FREQ_SYS / (fast ? 4000 : 250));
+}
+#endif
 
 /* One key press and one haptic burst per N steps; a change of direction restarts the count. Steps that
  * come too soon after the last key or find the queue full are dropped without a burst, so a click always

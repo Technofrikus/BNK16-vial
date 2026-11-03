@@ -1,8 +1,8 @@
 /*
  * power_management.h — 电源管理
- * 功能：10分钟无操作进睡眠，按键唤醒；有线模式不进睡眠；
- *       低电量LED1慢闪；WFI低功耗；
- *       阶梯式蓝牙连接间隔（15/300/500/1000ms，按睡眠时长切换）
+ * Sleep after POWER_SLEEP_TIMEOUT_MS without a key (LEDs and their supply off, link stays up), any key
+ * wakes; no sleep in wired mode. WFI between QMK tasks. BLE interval 15 ms, 100-120 ms after a while
+ * asleep (ble_config.h). Low battery: LED1 blinks slowly.
  */
 
 #ifndef __POWER_MANAGEMENT_H
@@ -15,10 +15,8 @@
  * 配置参数
  * ======================================================================== */
 
-/* 无操作超时时间（毫秒）— 默认10分钟
- * 超过这个时间没有按键操作，自动进入浅睡眠
- */
-#define POWER_SLEEP_TIMEOUT_MS     (10 * 60 * 1000)  /* 10分钟无操作进入睡眠 */
+/* Idle time before the board sleeps (LEDs off, link stays up) */
+#define POWER_SLEEP_TIMEOUT_MS     (5 * 60 * 1000)
 
 /* 低电量阈值（百分比）— 低于这个值 LED1 慢闪提醒 */
 #define POWER_LOW_BATTERY_THRESHOLD  10  /* 10% */

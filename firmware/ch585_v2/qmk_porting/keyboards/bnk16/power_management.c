@@ -1,8 +1,8 @@
 /*
  * power_management.c — 电源管理
- * 功能：10分钟无操作进睡眠，按键唤醒；有线模式不进睡眠；
+ * 功能：无操作进睡眠，按键唤醒；有线模式不进睡眠；
  *       睡眠时关LED，低电量LED1慢闪；WFI低功耗；
- *       阶梯式蓝牙连接间隔（15/300/500/1000ms，按睡眠时长30/90/180分钟切换）
+ *       Connection interval by time asleep: fast, slow (ble_config.h)
  */
 
 #include "power_management.h"
@@ -12,6 +12,10 @@
 #include "timer.h"
 #include "led_indicator.h"
 #include "CH58x_common.h"
+#ifdef BNK16_POWER_DIAG
+#include "battery_measure.h"
+#include "bnk16.h"
+#endif
 
 /* ========================================================================
  * 内部状态
@@ -23,6 +27,9 @@ static bool low_battery_active = false;
 static bool s_wired_mode = false;
 static bool s_mobile_mode = false;  /* 携带模式：禁用阶梯式连接间隔，固定2000ms */
 static uint32_t sleep_start_time = 0;
+#ifdef BNK16_POWER_DIAG
+static bool s_knob_slow = false;
+#endif
 
 /* ========================================================================
  * 初始化
@@ -67,17 +74,18 @@ void power_task(void)
      */
     if (current_power_state == POWER_STATE_SLEEPING && !s_mobile_mode) {
         uint32_t sleep_duration = now - sleep_start_time;
-        uint8_t target_level = 0;
+        uint8_t target_level = sleep_duration >= BLE_CONN_INTERVAL_L1_TIME ? 1 : 0;
 
-        if (sleep_duration >= BLE_CONN_INTERVAL_L2_TIME) {
-            target_level = 3;  /* 180分钟+：1000ms */
-        } else if (sleep_duration >= BLE_CONN_INTERVAL_L1_TIME) {
-            target_level = 2;  /* 90~180分钟：500ms */
-        } else if (sleep_duration >= BLE_CONN_INTERVAL_L0_TIME) {
-            target_level = 1;  /* 30~90分钟：300ms */
-        } else {
-            target_level = 0;  /* 0~30分钟：15ms */
+#ifdef BNK16_POWER_DIAG
+        /* one more thing off per minute, to find where the sleep current goes; the last stage needs a power cycle */
+        if (sleep_duration >= BNK16_POWER_DIAG_OFF_TIME) {
+            battery_handle_critical();
         }
+        if (sleep_duration >= BNK16_POWER_DIAG_KNOB_TIME && !s_knob_slow) {
+            s_knob_slow = true;
+            bnk16_knob_timer(false);
+        }
+#endif
 
         if (target_level != ble_get_current_interval_level()) {
             ble_request_conn_interval(target_level);
@@ -89,6 +97,11 @@ void power_task(void)
     if (s_wired_mode) {
         last_activity_time = now;
         return;
+    }
+
+    /* Awake: the request on wake-up is dropped if the last one was under 5 s ago, so repeat it */
+    if (!s_mobile_mode && ble_get_current_interval_level() != 0) {
+        ble_request_conn_interval(0);
     }
 
     /* 无操作超时进睡眠 */
@@ -135,6 +148,12 @@ void power_wake_up(void)
     current_power_state = POWER_STATE_ACTIVE;
     last_activity_time = timer_read32();
     ble_request_conn_interval(0);  /* 唤醒恢复低延迟 */
+#ifdef BNK16_POWER_DIAG
+    if (s_knob_slow) {
+        s_knob_slow = false;
+        bnk16_knob_timer(true);
+    }
+#endif
 
     /* LED0 连接状态灯由 led_indicator 管理 */
 }

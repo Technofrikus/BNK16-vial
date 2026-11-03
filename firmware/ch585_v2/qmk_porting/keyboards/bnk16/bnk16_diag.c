@@ -5,9 +5,11 @@
  */
 #include "bnk16_diag.h"
 
-#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE)
+#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG)
 #include QMK_KEYBOARD_H
 #include "CH58x_common.h"
+#include "ble_app.h"
+#include "power_management.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -285,7 +287,59 @@ static void switch_probe_task(void) {
 }
 #endif
 
+#ifdef BNK16_INTERVAL_DEBUG
+/* ========================================================================
+ * Interval report: shows whether the host accepted the slower intervals. Typed over BLE:
+ * "start" 3 s after the first connection, which proves that typing from here works, then one line
+ * 10 s after a key press with the state at the moment of the press; typing earlier, while the link is still
+ * on a slow interval, loses characters. Only the first press of those 10 s is reported:
+ * s1 asleep or s0 awake, n requests sent, r status of the last request (0 = accepted by the stack),
+ * m its max interval, u updates seen on the link, i interval, l latency, t timeout.
+ * Interval units are 1.25 ms, so 12 = 15 ms, 96 = 120 ms, 816 = 1020 ms.
+ * ======================================================================== */
+static ble_conn_debug_t key_snapshot;
+static bool             key_asleep;
+static bool             key_pending;
+static uint32_t         key_time;
+
+/* Called on every key press, before it can wake the board */
+void bnk16_diag_note_key(void) {
+    if (!key_pending) {
+        key_snapshot = ble_conn_debug;
+        key_asleep   = power_get_state() == POWER_STATE_SLEEPING;
+        key_pending  = true;
+        key_time     = timer_read32();
+    }
+}
+
+static void interval_report_task(void) {
+    static bool     started;
+    static uint32_t connected_time;
+    char            line[64];
+
+    if (!ble_is_connected()) {
+        connected_time = timer_read32();
+        return;
+    }
+    if (!started && timer_elapsed32(connected_time) >= 3000) {
+        started = true;
+        send_string(" start\n");
+        clear_keyboard();
+    }
+    if (key_pending && timer_elapsed32(key_time) >= 10000) {
+        const ble_conn_debug_t *c = &key_snapshot;
+        snprintf(line, sizeof(line), " s%u n%u r%u m%u u%u i%u l%u t%u\n", key_asleep, c->requests, c->request_status, c->requested_max, c->updates, c->interval, c->latency, c->timeout);
+        send_string(line);
+        clear_keyboard();
+        key_pending = false;
+    }
+}
+#endif
+
 void bnk16_diag_task(void) {
+#ifdef BNK16_INTERVAL_DEBUG
+    interval_report_task();
+#endif
 #ifdef BNK16_PIN_SCAN
     pin_scan_task();
 #endif

@@ -43,4 +43,7 @@ bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up);
 void bnk16_toggle_show_unassigned(void);
 bool bnk16_show_unassigned(void);
 void bnk16_status_mobile_mode(bool on);
+#ifdef BNK16_POWER_DIAG
+void bnk16_knob_timer(bool fast);
+#endif
 uint8_t bnk16_keycode_bt_device(uint16_t keycode);

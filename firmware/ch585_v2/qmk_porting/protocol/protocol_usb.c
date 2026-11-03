@@ -22,6 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "usb_interface.h"
 #include "ble_app.h"
 #include "led_indicator.h"
+#include "power_management.h"
 #ifdef RAW_ENABLE
 #include "raw_hid.h"
 #endif
@@ -32,6 +33,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 extern int usbd_deinitialize(uint8_t busid);
 extern bool wired_mode_active;  /* 有线模式标志，定义在 ch585_evb.c */
+
+#define BT_QMK_TASK_ACTIVE_MS 1
+#define BT_QMK_TASK_SLEEP_MS  4
 
 /* 上一个键盘报告 — 用于报告去重，相同状态不重复发送 */
 static report_keyboard_t last_keyboard_report;
@@ -172,6 +176,19 @@ __HIGH_CODE static void platform_run()
 
     /* 处理 BLE 协议栈任务（TMOS 调度器） */
     TMOS_SystemProcess();
+
+    /* BT mode runs on battery: scan less often and let the core wait for the next interrupt in between.
+     * The big knob timer wakes it every 250 us at the latest, so TMOS still runs on time. */
+    static uint32_t last_qmk_task;
+    uint32_t now = timer_read32();
+    uint32_t interval = power_get_state() == POWER_STATE_SLEEPING ? BT_QMK_TASK_SLEEP_MS : BT_QMK_TASK_ACTIVE_MS;
+    if (!wired_mode_active && now - last_qmk_task < interval) {
+        __WFI();
+        __nop();
+        __nop();
+        return;
+    }
+    last_qmk_task = now;
 
     ble_qmk_task_running(true);
     usb_run_qmk_task();
