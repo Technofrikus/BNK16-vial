@@ -140,6 +140,7 @@
 // #define BNK16_PIN_SCAN
 // #define BNK16_SWITCH_PROBE
 // #define BNK16_VBUS_PROBE /* types the PA6 and chip supply voltage range every 3 s, see bnk16_diag.c */
+// #define BNK16_CABLE_PROBE /* phase 40d: types every free pin's level and voltage over BLE when the cable changes them, see bnk16_diag.c */
 // #define BNK16_INTERVAL_DEBUG /* types what the BLE link really uses after each wake-up, see bnk16_diag.c */
 // #define BNK16_POWER_DIAG /* asleep: knob timer slowed to 250 Hz after the KNOB time, chip off after the OFF time, see power_management.c */
 #define BNK16_POWER_DIAG_KNOB_TIME (2 * 60 * 1000) /* 250 Hz loses the key that wakes the board, so not used outside the diagnostic */

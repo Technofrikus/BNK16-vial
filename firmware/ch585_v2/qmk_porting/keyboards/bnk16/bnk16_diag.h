@@ -22,7 +22,7 @@ void bnk16_diag_boot(void);
 static inline void bnk16_diag_boot(void) {}
 #endif
 
-#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG) || defined(BNK16_SLEEP_DIAG) || defined(BNK16_VBUS_PROBE)
+#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG) || defined(BNK16_SLEEP_DIAG) || defined(BNK16_VBUS_PROBE) || defined(BNK16_CABLE_PROBE)
 void bnk16_diag_task(void);
 #else
 static inline void bnk16_diag_task(void) {}

@@ -5,7 +5,7 @@
  */
 #include "bnk16_diag.h"
 
-#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG) || defined(BNK16_SLEEP_DIAG) || defined(BNK16_VBUS_PROBE)
+#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG) || defined(BNK16_SLEEP_DIAG) || defined(BNK16_VBUS_PROBE) || defined(BNK16_CABLE_PROBE)
 #include QMK_KEYBOARD_H
 #include "CH58x_common.h"
 #include "ble_app.h"
@@ -151,8 +151,9 @@ static const struct { pin_t pin; const char *name; } sp_pins[] = {
 #define SP_N       (sizeof(sp_pins) / sizeof(sp_pins[0]))
 #define SP_FREE    18
 #define SP_DRIVERS (SP_FREE + 5)
-#define SP_ADC     14 /* the first 14 free pins (PA0-PA9, PA12-PA15) are ADC inputs */
-static const uint8_t sp_adc_channel[SP_ADC] = { 9, 8, 7, 6, 0, 1, 10, 11, 12, 13, 2, 3, 4, 5 };
+#define SP_ADC     13 /* the first 13 free pins (PA0-PA6, PA8, PA9, PA12-PA15) are ADC inputs */
+/* until phase 40d this table had AIN11 (= PA7) for a8, so every ADC label from a8 on was one pin off */
+static const uint8_t sp_adc_channel[SP_ADC] = { 9, 8, 7, 6, 0, 1, 10, 12, 13, 2, 3, 4, 5 };
 static int8_t        sp_adc_start[SP_ADC];
 static int8_t        sp_adc_shown[SP_ADC];
 
@@ -444,7 +445,197 @@ static void vbus_probe_task(void) {
 }
 #endif
 
+#ifdef BNK16_CABLE_PROBE
+/* ========================================================================
+ * Cable probe (phase 40d/40e): looks for a VBUS sense pin and the charger status pin. On the PCB layout the stock
+ * firmware was built for, VBUS is a pin without pull (high = cable) and the charger status an open drain that
+ * is low while charging, read only with VBUS present. Phase 40 lost the start of every line with the cable in,
+ * which is where its pin levels were, so the cable case was never really seen.
+ * One candidate per 25 ms (each pin every 400 ms; 40d used 6 ms and the link kept dropping) is read four times:
+ * with pull-down, floating after it, with pull-up, floating after it. So "0000" = driven low, "1111" = driven
+ * high, "0011" = not driven (keeps the last pull), a VBUS divider is low without cable and high with it,
+ * a charger status pin reads "0000" while charging and "0011" otherwise. ADC pins are also measured floating,
+ * in mV (-12 dB conversion, so up to about 4.2 V). A code counts once it was the same 5 times in a row (2 s).
+ * Lines are typed over BLE (BT position) once nothing changed for 5 s, so plugging the cable cannot eat them,
+ * after 3 spaces as sacrificial characters, with the battery voltage (4.2 V = charging):
+ *   n0 bat 4012 a0 0011 v1650 ... b22 1111     every pin, once 3 s after connecting
+ *   n3 bat 4195 a3 0000 v0                     later only the pins that changed
+ * A pin that changed more than 6 times within 20 s is reported once as "a3x" and then left out (floating noise);
+ * in 40d such a pin kept the 5 s quiet timer from ever running out, so no line came after the first.
+ * Keeps the board awake (no sleep, no shutdown) while it runs.
+ * ======================================================================== */
+#include "battery.h"
+
+static const struct { pin_t pin; const char *name; int8_t ain; } cp_pins[] = {
+    { A0, "a0", 9 }, { A1, "a1", 8 }, { A2, "a2", 7 }, { A3, "a3", 6 }, { A4, "a4", 0 }, { A5, "a5", 1 },
+    { A8, "a8", 12 }, { A9, "a9", 13 }, { A12, "a12", 2 }, { A13, "a13", 3 }, { A14, "a14", 4 }, { A15, "a15", 5 },
+    { B18, "b18", -1 }, { B19, "b19", -1 }, { B20, "b20", -1 }, { B22, "b22", -1 },
+};
+#define CP_N              (sizeof(cp_pins) / sizeof(cp_pins[0]))
+#define CP_STEP_MS        25
+#define CP_SETTLE_US      100
+#define CP_STABLE_SAMPLES 5
+#define CP_QUIET_MS       5000
+#define CP_CONNECTED_MS   3000
+#define CP_MV_STEP        300
+#define CP_MAX_CHANGES    6
+#define CP_NOISE_WINDOW_MS 20000
+#define CP_UNKNOWN        0xFF
+
+static struct {
+    uint8_t code, candidate, count, changes;
+    bool    dirty, noisy, noisy_shown;
+    int16_t mv, mv_shown; /* smoothed, -1 = not measured yet */
+} cp[CP_N];
+
+static uint8_t cp_read_code(pin_t pin) {
+    uint8_t code = 0;
+    gpio_set_pin_input_low(pin);
+    wait_us(CP_SETTLE_US);
+    code |= gpio_read_pin(pin) << 3;
+    gpio_set_pin_input(pin);
+    wait_us(CP_SETTLE_US);
+    code |= gpio_read_pin(pin) << 2;
+    gpio_set_pin_input_high(pin);
+    wait_us(CP_SETTLE_US);
+    code |= gpio_read_pin(pin) << 1;
+    gpio_set_pin_input(pin); /* left floating, so a divider is not loaded */
+    wait_us(CP_SETTLE_US);
+    code |= gpio_read_pin(pin);
+    return code;
+}
+
+static int16_t cp_read_mv(uint8_t ain) {
+    uint32_t sum = 0;
+    ADC_ExtSingleChSampInit(SampleFreq_4_or_2, ADC_PGA_1_4);
+    ADC_ChannelCfg(ain);
+    ADC_ExcutSingleConver();
+    for (uint8_t n = 0; n < 8; n++) {
+        sum += ADC_ExcutSingleConver();
+    }
+    R8_ADC_CFG &= ~(RB_ADC_BUF_EN | RB_ADC_POWER_ON);
+    return ADC_VoltConverSignalPGA_MINUS_12dB(sum / 8);
+}
+
+static void cable_probe_task(void) {
+    static bool     started, full_done;
+    static uint8_t  next;
+    static uint16_t count;
+    static uint32_t last_step, last_change, connected_time, noise_window;
+    static char     line[320];
+
+    if (!started) {
+        if (timer_read32() < 5000) {
+            return;
+        }
+        started = true;
+        GPIOADigitalCfg(ENABLE, GPIO_Pin_0 | GPIO_Pin_1 | GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_4 | GPIO_Pin_5 | GPIO_Pin_8 | GPIO_Pin_9 | GPIO_Pin_12 | GPIO_Pin_13 | GPIO_Pin_14 | GPIO_Pin_15);
+        GPIOBDigitalCfg(ENABLE, GPIO_Pin_18 | GPIO_Pin_19 | GPIO_Pin_20 | GPIO_Pin_22);
+        for (uint8_t i = 0; i < CP_N; i++) {
+            cp[i].code = cp[i].candidate = CP_UNKNOWN;
+            cp[i].mv = cp[i].mv_shown = -1;
+        }
+        last_change = timer_read32();
+    }
+    power_notify_activity();
+
+    if (timer_elapsed32(last_step) >= CP_STEP_MS) {
+        last_step = timer_read32();
+        uint8_t i = next;
+        next      = (next + 1) % CP_N;
+
+        if (i == 0 && timer_elapsed32(noise_window) >= CP_NOISE_WINDOW_MS) {
+            noise_window = timer_read32();
+            for (uint8_t j = 0; j < CP_N; j++) {
+                cp[j].changes = 0;
+            }
+        }
+
+        bool    changed = false;
+        uint8_t code    = cp_read_code(cp_pins[i].pin);
+        if (code != cp[i].candidate) {
+            cp[i].candidate = code;
+            cp[i].count     = 1;
+        } else if (cp[i].count < CP_STABLE_SAMPLES && ++cp[i].count == CP_STABLE_SAMPLES && code != cp[i].code) {
+            if (cp[i].code != CP_UNKNOWN) {
+                cp[i].changes++;
+            }
+            cp[i].code  = code;
+            cp[i].dirty = true;
+            changed     = true;
+        }
+
+        if (cp_pins[i].ain >= 0) {
+            int16_t mv = cp_read_mv(cp_pins[i].ain);
+            cp[i].mv   = cp[i].mv < 0 ? mv : (cp[i].mv * 3 + mv) / 4;
+            if (cp[i].mv_shown < 0 || cp[i].mv - cp[i].mv_shown >= CP_MV_STEP || cp[i].mv_shown - cp[i].mv >= CP_MV_STEP) {
+                if (cp[i].mv_shown >= 0) {
+                    cp[i].changes++;
+                }
+                cp[i].mv_shown = cp[i].mv;
+                cp[i].dirty    = true;
+                changed        = true;
+            }
+        }
+        if (cp[i].changes > CP_MAX_CHANGES) {
+            cp[i].noisy = true;
+        }
+        if (changed && !cp[i].noisy) {
+            last_change = timer_read32();
+        }
+    }
+
+    if (!ble_is_connected()) {
+        connected_time = timer_read32();
+        return;
+    }
+    if (timer_elapsed32(connected_time) < CP_CONNECTED_MS || timer_elapsed32(last_change) < CP_QUIET_MS) {
+        return;
+    }
+    for (uint8_t i = 0; i < CP_N; i++) {
+        if (cp[i].code == CP_UNKNOWN) {
+            return;
+        }
+    }
+
+    size_t len   = snprintf(line, sizeof(line), "   n%u bat %u", count, battery_get_voltage_mv());
+    bool   found = !full_done;
+    for (uint8_t i = 0; i < CP_N && len < sizeof(line); i++) {
+        if (cp[i].noisy) {
+            if (!cp[i].noisy_shown) {
+                cp[i].noisy_shown = true;
+                found             = true;
+                len += snprintf(line + len, sizeof(line) - len, " %sx", cp_pins[i].name);
+            }
+            continue;
+        }
+        if (!full_done || cp[i].dirty) {
+            found = true;
+            len += snprintf(line + len, sizeof(line) - len, " %s %u%u%u%u", cp_pins[i].name, (cp[i].code >> 3) & 1, (cp[i].code >> 2) & 1, (cp[i].code >> 1) & 1, cp[i].code & 1);
+            if (cp_pins[i].ain >= 0 && len < sizeof(line)) {
+                len += snprintf(line + len, sizeof(line) - len, " v%d", cp[i].mv_shown);
+            }
+        }
+        cp[i].dirty = false;
+    }
+    if (!found) {
+        return;
+    }
+    full_done = true;
+    count++;
+    if (len < sizeof(line) - 1) {
+        line[len++] = '\n';
+        line[len]   = '\0';
+    }
+    send_string_with_delay(line, 20);
+    clear_keyboard();
+}
+#endif
+
 void bnk16_diag_task(void) {
+#ifdef BNK16_CABLE_PROBE
+    cable_probe_task();
+#endif
 #ifdef BNK16_VBUS_PROBE
     vbus_probe_task();
 #endif
