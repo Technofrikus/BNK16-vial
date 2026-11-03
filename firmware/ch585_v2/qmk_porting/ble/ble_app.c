@@ -47,6 +47,14 @@ static ble_state_t current_state = BLE_STATE_IDLE;
 #define BLE_RECONNECT_TIMEOUT   30000   /* 回连总超时：30秒（定向广播1.28秒+普通广播约28秒） */
 #define BLE_PAIRING_TIMEOUT     180000  /* 配对超时：3分钟（量产键盘标准） */
 #define BLE_DIRECTED_ADV_TIMEOUT 1500   /* 定向广播协议栈超时1.28秒，留余量1.5秒后转普通广播 */
+#define BLE_ENCRYPT_TIMEOUT_MS  10000   /* a link that may not pair must be encrypted by then, else it is dropped */
+/* The stack writes the last part of a bond (the host's notification settings) only when the link ends.
+ * After a power cut that record is incomplete, and the stack formats the whole SNV area at the next
+ * boot (seen in phase 44 dumps). So the bond is saved this long after every encryption. */
+#define BLE_BOND_UPDATE_DELAY_MS 5000
+/* Storage layout. 1: addresses from the chip MAC, SNV area erased once (stock bonds at 0x7800). An older
+ * table makes ble_app_init() erase the stack's bonds and empty the slots, so every host pairs again. */
+#define BLE_BOND_TABLE_LAYOUT   1
 
 /* 单个设备的绑定信息 */
 typedef struct {
@@ -60,7 +68,7 @@ typedef struct {
     uint8_t magic;                   /* 魔数 BLE_BOND_TABLE_MAGIC */
     uint8_t current_device;          /* 当前选中的设备槽位（1-3） */
     uint8_t snv_erase_pending;       /* the stack's bonds still have to be erased (survives a reset) */
-    uint8_t reserved;                /* 保留字节，对齐用 */
+    uint8_t layout;                  /* BLE_BOND_TABLE_LAYOUT; 0 in tables from before phase 44 */
     ble_device_info_t devices[BLE_MAX_DEVICES];  /* 3个设备槽位 */
 } ble_bond_table_t;
 
@@ -83,6 +91,14 @@ static bool adv_active = false;     /* advertising requested or running; cleared
 static uint8_t conn_peer_addr_type = 0;
 static uint8_t conn_peer_addr[B_ADDR_LEN];
 static bool conn_peer_valid = false;
+
+/* Pairing gate: a new host may only pair in a pairing hold or on an empty slot. Any other link must be
+ * encrypted with an existing bond within BLE_ENCRYPT_TIMEOUT_MS. */
+static bool link_may_pair = false;
+static bool link_secure = false;
+static uint32_t link_start_time = 0;
+static bool bond_update_pending = false;
+static uint32_t link_secure_time = 0;
 
 /* HID 报告去重：上一次成功发送的报告
  * 大连接间隔(500/1000ms)下，矩阵扫描重复生成相同报告，
@@ -125,6 +141,8 @@ static void ble_set_device_name(uint8_t device_idx);
 static void ble_request_slot(uint8_t device_idx, bool pairing);
 static void ble_run_pending(void);
 static void ble_erase_stack_bonds(void);
+static void ble_set_pairing_allowed(bool allowed);
+static void ble_start_reconnect(void);
 
 /* ========================================================================
  * 广播数据
@@ -225,12 +243,37 @@ static void ble_set_device_name(uint8_t device_idx)
  * GAPROLE_STARTED: see ble_request_slot() and ble_run_pending().
  * ======================================================================== */
 
-/* Static random address of each slot, LSB first; the first and last byte differ per slot */
+/* Static random address of each slot, LSB first. Built from the chip's MAC, so every board has its
+ * own: the first byte differs per slot, the top two bits of the last byte are set (static random).
+ * The fixed table is only the fallback for a MAC that would give an invalid address. */
 static const uint8_t device_addresses[BLE_MAX_DEVICES][B_ADDR_LEN] = {
     {0xC1, 0x16, 0x85, 0x35, 0x4E, 0xC1},  /* 设备1 */
     {0xC2, 0x16, 0x85, 0x35, 0x4E, 0xC2},  /* 设备2 */
     {0xC3, 0x16, 0x85, 0x35, 0x4E, 0xC3},  /* 设备3 */
 };
+
+static void ble_get_device_address(uint8_t device_idx, uint8_t *addr)
+{
+    uint8_t mac[B_ADDR_LEN];
+    bool all_ones = true;
+    bool random_zero = true;
+
+    GetMACAddress(mac);
+    memcpy(addr, mac, B_ADDR_LEN);
+    addr[0] ^= (uint8_t)(device_idx - 1);
+    addr[B_ADDR_LEN - 1] |= 0xC0;
+
+    /* the 46 random bits must not be all 0 or all 1 */
+    for (uint8_t i = 0; i < B_ADDR_LEN; i++) {
+        uint8_t random_bits = i == B_ADDR_LEN - 1 ? (addr[i] & 0x3F) : addr[i];
+        uint8_t ones = i == B_ADDR_LEN - 1 ? 0x3F : 0xFF;
+        all_ones = all_ones && random_bits == ones;
+        random_zero = random_zero && random_bits == 0;
+    }
+    if (all_ones || random_zero) {
+        memcpy(addr, device_addresses[device_idx - 1], B_ADDR_LEN);
+    }
+}
 
 /* Returns false if the stack refused the address; the caller retries */
 static bool ble_set_device_address(uint8_t device_idx)
@@ -241,7 +284,7 @@ static bool ble_set_device_address(uint8_t device_idx)
         return false;
     }
 
-    memcpy(addr, device_addresses[device_idx - 1], B_ADDR_LEN);
+    ble_get_device_address(device_idx, addr);
     return GAP_ConfigDeviceAddr(ADDRTYPE_STATIC, addr) == SUCCESS;
 }
 
@@ -489,6 +532,12 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
                     break;
                 }
 
+                /* Pairing is open only if it was open while advertising (ble_run_pending()) */
+                link_may_pair = current_state == BLE_STATE_PAIRING || current_state == BLE_STATE_ADVERTISING ||
+                                !bond_table_is_paired(bond_table.current_device);
+                link_secure = false;
+                link_start_time = timer_read32();
+
                 current_state = BLE_STATE_CONNECTED;
 
                 /* 重置待重试队列：重新连接后清空旧报告 */
@@ -537,6 +586,8 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
             }
             conn_handle = GAP_CONNHANDLE_INIT;
             conn_peer_valid = false;
+            link_secure = false;
+            bond_update_pending = false;
             adv_active = false;
 
             ble_erase_stack_bonds();
@@ -555,8 +606,7 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
 
             if (current_state == BLE_STATE_RECONNECTING) {
                 if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
-                    ble_device_info_t *dev = &bond_table.devices[bond_table.current_device - 1];
-                    ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
+                    ble_start_reconnect();
                 } else {
                     ble_start_general_advertising();
                     led_set_conn_state(LED_CONN_RECONNECTING);
@@ -832,6 +882,7 @@ uint16_t ble_get_conn_handle(void)
 void ble_start_advertising(void)
 {
     if (current_state != BLE_STATE_CONNECTED && !wired_mode_active) {
+        ble_set_pairing_allowed(true);
         uint8_t advertising_enable = TRUE;
         GAPRole_SetParameter(GAPROLE_ADVERT_ENABLED, sizeof(uint8_t), &advertising_enable);
         adv_active = true;
@@ -861,17 +912,29 @@ static void bond_table_set_empty(void)
 {
     memset(&bond_table, 0, sizeof(ble_bond_table_t));
     bond_table.magic = BLE_BOND_TABLE_MAGIC;
+    bond_table.layout = BLE_BOND_TABLE_LAYOUT;
     bond_table.current_device = 1;
 }
 
-/* Load the table; first use or bad contents give an empty table */
+/* Load the table; first use or bad contents give an empty table. A table from an older layout (or none)
+ * also erases the whole SNV area, which removes our bonds for the old addresses and anything the stock
+ * firmware left there, then resets once: the stack read the SNV area at init, so it must start again
+ * on the clean area. */
 static void bond_table_load(void)
 {
     if (EEPROM_READ(BLE_BOND_TABLE_FLASH_ADDR, &bond_table, sizeof(ble_bond_table_t)) != 0 ||
-        bond_table.magic != BLE_BOND_TABLE_MAGIC ||
+        bond_table.magic != BLE_BOND_TABLE_MAGIC || bond_table.layout != BLE_BOND_TABLE_LAYOUT ||
         bond_table.current_device < 1 || bond_table.current_device > BLE_MAX_DEVICES) {
+        EEPROM_ERASE(BLE_SNV_ADDR, BLE_SNV_BLOCK * BLE_SNV_NUM);
         bond_table_set_empty();
         bond_table_save();
+
+        /* reset only if the next boot will read the new table back, so this cannot loop */
+        ble_bond_table_t stored __attribute__((aligned(4)));
+        if (EEPROM_READ(BLE_BOND_TABLE_FLASH_ADDR, &stored, sizeof(ble_bond_table_t)) == 0 &&
+            memcmp(&stored, &bond_table, sizeof(ble_bond_table_t)) == 0) {
+            SYS_ResetExecute();
+        }
     }
 }
 
@@ -926,10 +989,25 @@ static void bond_table_set_device(uint8_t device_idx, uint8_t addr_type, uint8_t
  * COMPLETE and then BONDED. */
 void ble_app_pair_state(uint8_t state, uint8_t status)
 {
-    if (status == SUCCESS && conn_peer_valid &&
-        (state == GAPBOND_PAIRING_STATE_COMPLETE || state == GAPBOND_PAIRING_STATE_BONDED)) {
+    if (status != SUCCESS || !conn_peer_valid) {
+        return;
+    }
+    if (state == GAPBOND_PAIRING_STATE_BONDED ||
+        (state == GAPBOND_PAIRING_STATE_COMPLETE && link_may_pair)) {
+        link_secure = true;
+        bond_update_pending = true;
+        link_secure_time = timer_read32();
+        /* A bonded host may come back with a new private address: keep the latest one */
         bond_table_set_device(bond_table.current_device, conn_peer_addr_type, conn_peer_addr);
     }
+}
+
+/* Pairing mode of the bond manager. Only a pairing hold or an empty slot accepts a pairing request; a
+ * host that is already bonded only encrypts with its key and is not affected. */
+static void ble_set_pairing_allowed(bool allowed)
+{
+    uint8_t mode = allowed ? BLE_PAIRING_MODE : GAPBOND_PAIRING_MODE_NO_PAIRING;
+    GAPBondMgr_SetParameter(GAPBOND_PERI_PAIRING_MODE, sizeof(uint8_t), &mode);
 }
 
 /* Clear all slots. Saved at once, because a factory reset follows immediately. */
@@ -978,6 +1056,22 @@ static void ble_start_directed_advertising(uint8_t addr_type, uint8_t *bd_addr)
     led_set_conn_state(LED_CONN_RECONNECTING);  /* 慢闪表示回连中 */
 }
 
+/* Reconnect to the current slot. A host with a resolvable private address (random, top bits 01) has
+ * changed it since it was stored, so directed advertising would only waste its 1.28 s: general
+ * advertising at once. Pairing is closed either way (ble_run_pending()). */
+static void ble_start_reconnect(void)
+{
+    ble_device_info_t *dev = &bond_table.devices[bond_table.current_device - 1];
+
+    if (dev->addr_type != ADDRTYPE_PUBLIC && (dev->bd_addr[B_ADDR_LEN - 1] & 0xC0) == 0x40) {
+        ble_start_general_advertising();
+        current_state = BLE_STATE_RECONNECTING;
+        led_set_conn_state(LED_CONN_RECONNECTING);
+    } else {
+        ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
+    }
+}
+
 /* 开始普通广播（可被新设备搜索到） */
 static void ble_start_general_advertising(void)
 {
@@ -1007,7 +1101,18 @@ static void ble_check_timeout(void)
         return;
     }
 
-    if (current_state == BLE_STATE_RECONNECTING) {
+    if (current_state == BLE_STATE_CONNECTED && bond_update_pending &&
+        now - link_secure_time > BLE_BOND_UPDATE_DELAY_MS) {
+        bond_update_pending = false;
+        GAPBondMgr_SetParameter(GAPBOND_BOND_UPDATE, 0, NULL);
+    }
+
+    if (current_state == BLE_STATE_CONNECTED && !link_may_pair && !link_secure &&
+        now - link_start_time > BLE_ENCRYPT_TIMEOUT_MS) {
+        /* not this slot's host: drop it, GAPROLE_WAITING reconnects the slot */
+        link_start_time = now;
+        ble_disconnect();
+    } else if (current_state == BLE_STATE_RECONNECTING) {
         /* 30 s total (directed, then general advertising), then standby: a key press restarts it */
         if (now - state_enter_time > BLE_RECONNECT_TIMEOUT) {
             ble_stop_advertising();
@@ -1093,12 +1198,14 @@ static void ble_run_pending(void)
     switch_retries = 0;
 
     if (!pairing && bond_table_is_paired(device_idx)) {
-        /* directed advertising first; general advertising follows when it times out */
-        ble_device_info_t *dev = &bond_table.devices[device_idx - 1];
-        ble_start_directed_advertising(dev->addr_type, dev->bd_addr);
+        /* directed advertising first (unless the host uses a private address); general advertising
+         * follows when it times out. No pairing: only the bonded host may connect. */
+        ble_set_pairing_allowed(false);
+        ble_start_reconnect();
     } else {
         /* no bond in this slot, or a pairing hold: open for pairing (an old bond stays until a new
          * pairing replaces it) */
+        ble_set_pairing_allowed(true);
         current_state = BLE_STATE_PAIRING;
         ble_start_general_advertising();
         led_set_conn_state(LED_CONN_PAIRING);
