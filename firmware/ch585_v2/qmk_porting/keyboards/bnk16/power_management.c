@@ -74,6 +74,12 @@ void power_task(void)
         }
     }
 
+    /* Empty battery: shut down to protect the cell, the same way as after a long idle; a key reboots it.
+     * In the USB position the switch cuts the battery, so only on battery. */
+    if (!s_wired_mode && battery_is_critical() && bnk16_deep_sleep_possible()) {
+        bnk16_shutdown();
+    }
+
     /* 睡眠状态：按睡眠时长阶梯式切换蓝牙连接间隔
      * 携带模式下跳过（固定2000ms，由携带模式进入时设置）
      */

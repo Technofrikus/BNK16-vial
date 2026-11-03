@@ -17,6 +17,8 @@
 #include "hiddev.h"
 #include "battservice.h"
 
+extern uint8_t battery_get_level(void); // keyboards/<board>/battery.c
+
 /*********************************************************************
  * MACROS
  */
@@ -308,13 +310,10 @@ bStatus_t Batt_MeasLevel(void)
 
     level = battMeasure();
 
-    // If level has gone down
-    if(level < battLevel)
+    // Notify on any change, so the host also sees the level rise after charging
+    if(level != battLevel)
     {
-        // Update level
         battLevel = level;
-
-        // Send a notification
         battNotifyLevel();
     }
 
@@ -382,13 +381,7 @@ static bStatus_t battReadAttrCB(uint16_t connHandle, gattAttribute_t *pAttr,
         uint8_t level;
 
         level = battMeasure();
-
-        // If level has gone down
-        if(level < battLevel)
-        {
-            // Update level
-            battLevel = level;
-        }
+        battLevel = level;
 
         *pLen = 1;
         pValue[0] = battLevel;
@@ -495,50 +488,8 @@ static void battNotifyCB(linkDBItem_t *pLinkItem)
  */
 static uint8_t battMeasure(void)
 {
-    uint16_t adc;
-    uint8_t  percent;
-
-    // Call measurement setup callback
-    if(battServiceSetupCB != NULL)
-    {
-        battServiceSetupCB();
-    }
-
-    // Configure ADC and perform a read
-    adc = 300;
-    // Call measurement teardown callback
-    if(battServiceTeardownCB != NULL)
-    {
-        battServiceTeardownCB();
-    }
-
-    if(adc >= battMaxLevel)
-    {
-        percent = 100;
-    }
-    else if(adc <= battMinLevel)
-    {
-        percent = 0;
-    }
-    else
-    {
-        if(battServiceCalcCB != NULL)
-        {
-            percent = battServiceCalcCB(adc);
-        }
-        else
-        {
-            uint16_t range = battMaxLevel - battMinLevel + 1;
-
-            // optional if you want to keep it even, otherwise just take floor of divide
-            // range += (range & 1);
-            range >>= 2; // divide by 4
-
-            percent = (uint8_t)((((adc - battMinLevel) * 25) + (range - 1)) / range);
-        }
-    }
-
-    return percent;
+    // the keyboard's battery.c measures, smooths and maps to percent
+    return battery_get_level();
 }
 
 /*********************************************************************

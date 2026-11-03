@@ -1,7 +1,7 @@
 /*
  * Binepad BNK16 board config.
  * Matrix, encoder, LED and layer switch pins are measured on the board, see docs/bnk16/HARDWARE.md.
- * VBUS, charger and battery pins are unknown and unused here.
+ * Battery: PA6 (AIN10), 1:2 divider, see battery.c. VBUS and charger pins are unknown (none found).
  */
 #pragma once
 
