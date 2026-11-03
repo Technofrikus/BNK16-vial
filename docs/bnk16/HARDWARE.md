@@ -36,9 +36,8 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 
 ## Going back to stock
 
-**Untested.** The stock images are not in this repository, because the EEPROM dump contains BLE bonding keys.
+**Not possible on this board with the files we have (tested 2026-11-03).** Flashing the restore stub, which jumps to the unmodified stock application, leaves the board dead with no USB — with and without restoring the EEPROM dump. The stub mechanics were verified instruction by instruction and are sound, so the cause is the hardware mismatch above: the published 1.7.141 release targets a different PCB revision than this board (probably revision 1) and drives LED power and the matrix/encoder pins on the wrong pins, so the stock app cannot run here. The build that actually shipped on the board is read-protected inside the original bootloader and cannot be recovered.
 
-1. Enter ISP mode and flash the restore image, a stub that jumps to the unmodified stock application: `BNK16-stock-restore-stub.bin`.
-2. Erase or restore the EEPROM.
+A working stock image for the exact hardware revision would have to come from Binepad support. The official (but mismatched) release is published in [binepad/binepad-updates](https://github.com/binepad/binepad-updates). The stock images and the EEPROM dump are kept out of this repository because the dump contains BLE bonding keys. Details in [PROJECT_NOTES.md](PROJECT_NOTES.md) ("Stub restore analysis" and section 7).
 
-The official firmware is published in [binepad/binepad-updates](https://github.com/binepad/binepad-updates). The stub has no UF2 bootloader, so later updates still need `wchisp`.
+Our Vial firmware is the firmware for this board and is always recoverable: hold BOOT (PB22) while plugging in and `wchisp flash <build>.bin`.

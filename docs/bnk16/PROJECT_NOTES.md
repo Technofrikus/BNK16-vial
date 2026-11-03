@@ -1,0 +1,409 @@
+# BNK16 → Vial: project notes
+
+Status as of 2026-11-03. Goal: replace the stock VIA firmware of the Binepad BNK16 macropad with QMK/Vial to get Tap Dance, Combos, modifier shortcuts (Ctrl+S…) and macros. Wired use is done, haptics work, Bluetooth works for typing, media keys and the mouse wheel, and the board shuts down on battery after 30 min idle (61 uA). **Next: flash `bnk16-phase43-secure.bin` and check the Vial unlock and the charging rule (file table). Open: the official BLE library and real deep sleep (phase 4b, "Later option").**
+
+**Current state: wired use, Bluetooth and the battery shutdown work.** The board runs our own `bnk16` build of NookCraftLab/ch585-qmk-vial (flashed with `wchisp`, **the stock bootloader is gone**). It enumerates as `5650:0b16` (Vialpad BNK16) and Vial detects it. Latest build: `bnk16-phase43-secure.bin` = commit `ce8d27e` (branch `bnk16-cleanup`, local, not pushed), daily settings: sleep after 5 min, slow BLE interval after 10 min, shutdown after 30 min or below 3.20 V, real battery level over BLE, no idle shutdown while the battery charges, Vial in secure mode (unlock combo). The timeouts were tested with 30 s stages in phases 39b/39c; with the normal timeouts they are being checked in daily use. Real deep sleep with the link kept failed (phase 38) and is off in the code.
+
+**Lesson learned:** the pin map read from the stock disassembly was wrong for matrix and encoders (see section 4). Only trust pins that were measured on the board. Exception that worked: fixed SFR addresses in the stock code (see PA11 below) are reliable, the decoded pin *tables* are not.
+
+---
+
+## 1. Files
+
+These binaries, dumps and JSON definitions live in the project working folder (`BNK16/`, the parent of this repo's `vial-build/` checkout), not in the repo. The stock firmware images and the EEPROM dump are kept out of the repo on purpose, because the dump holds BLE bonding keys.
+
+| File | What it is |
+|---|---|
+| `BNK16-1.7.141-USB-UPDATE.uf2` | Official stock firmware release (signed). SHA256 `9f7ca4b5ff6b668beecf6fe69b69343ccd7354807a59ec0cd2e35b64d7ddda49`. Matches Binepad's [catalogue.json](https://github.com/binepad/binepad-updates/blob/main/catalogue.json) entry, source: <https://github.com/binepad/binepad-updates/releases/tag/bnk16-1.7.141> |
+| `BNK16-stock-restore-stub.bin` | Restore image, flashable at `0x0`: one-instruction stub `j 0x19000` at `0x0`, `0xFF` up to `0x18000`, then the unmodified stock MCUboot image. SHA256 `6cd52eeecc032071142a36f940b28b502d4f7512f929dacc606dca64707ce993`. **Tested 2026-11-03: the board stays dead (no USB, not seen by stock VIA), also after restoring the EEPROM. The stub mechanics check out (see "Stub restore analysis"), so the cause is almost certainly that this 1.7.141 release is for a different PCB revision than the owner's board. Do not expect this to boot.** |
+| `bnk16-eeprom.bin` | 32 KB dump of the data flash/EEPROM, taken with the stock firmware installed (keymap, settings, **BLE bonding keys**, so keep it private) |
+| `bnk16-phase43-secure.bin` | **Not tested on the board.** Commit `ce8d27e`. Phase 42 plus: (1) `VIAL_INSECURE` removed. Vial now asks to hold the top-left and top-right key ((0,0)+(0,3)) before the matrix tester, macro edits or assigning `QK_BOOT`; other keymap edits work while locked. (2) No idle shutdown while the battery charges: `battery_is_charging()` = smoothed battery voltage >= 4.15 V (`BATTERY_CHARGING_VOLTAGE_MV`), since the charger holds 4.18-4.19 V. Only a partial cable detection: with a full battery and the charger done, the board still shuts down after 30 min with the cable in. After the cable is pulled, or once charging ends, the voltage drops and the shutdown follows. Test: Vial unlock prompt and combo; cable in on a battery below full, idle over 30 min, board stays connected. SHA256 `4ba6d2b12109809262d44fbd27e6698d9224dbccaf1d0a089e1322ec66cc6a87` |
+| `bnk16-phase42-battery.bin` | **Superseded by phase 43.** Commit `080ad84`. Tested 2026-11-03: battery level on the Mac works.** Phase 41 + real battery level: PA6/AIN10 read every 10 s, calibrated (bench supply 3.0-4.2 V, fit within 10 mV), smoothed, mapped to % with a LiPo curve (0 % = 3.30 V), reported over the BLE battery service (now also when the level rises). Shutdown below 3.20 V on battery (after 4 readings). SHA256 `52dba3d2ef2914736b23c468e9ff95e08623b3904cf8bc2305cffc44b4e97c85` |
+| `bnk16-phase41-shutdown.bin` | **Superseded by phase 42.** Commit `c1f8d19`. Phase 39c with all diagnostics and the test stages off: sleep after 5 min, BLE 100-120 ms after 10 min, shutdown after 30 min (constants checked in the disassembly). SHA256 `21ecd89cee341abbe7d2e3966d955f26ad6a39289a7551588a98db0b51a5156d` |
+| `bnk16-phase40e-cable-probe.bin` | **Tested 2026-11-03: no MCU pin follows the cable.** All 16 candidates read `0011` (not driven) on battery and stayed so through several plug cycles; only a0 drifted in its floating ADC value (noise). With 100 us settle a VBUS divider up to several MOhm or an open-drain charger status would have shown, and a change stays pending until it is typed, so the link drops did not hide one. So VBUS and charger status do not reach the MCU, the charge LED is hardware only; cable sense stays the 4.15 V battery rule of phase 43 plus USB enumeration. The BLE link still dropped every few seconds with the probe running (cause not found, probe only). Source: commit `5bd5b0d` (flag `BNK16_CABLE_PROBE` off). Phase 40d with two fixes: (1) a pin marked noisy (`a3x`) no longer resets the 5 s quiet timer, which in 40d blocked every line after the first; noisy = more than 6 changes within 20 s, so a real pin survives several plug cycles. (2) One pin every 25 ms instead of 6 ms (each pin every 400 ms, stable after 5 reads = 2 s), to load the main loop less, because the BLE link dropped about every 10 s with 40d (cause not found; suspects: the busy loop with ADC conversions, or a pull on one of the probed pins). Same output format and test as 40d. SHA256 `bbcbedb5f48680f9fa5c119c2f145d78610581ddfc5808802f58501e78d43220` |
+| `bnk16-phase40d-cable-probe.bin` | **Tested 2026-11-03: BLE link dropped about every 10 s, only the first line came (noisy-pin bug, fixed in 40e).** Was: Diagnostic, not tested on the board. Source uncommitted** (working tree on top of `ce8d27e`, flag `BNK16_CABLE_PROBE` switched off again after the build). Phase 43 plus a new cable probe looking for VBUS and charger status pins. Why: stock 1.7.141 reads VBUS on PB14 (no pull, high = cable, sleeps after 249 ms without it) and an active-low charger status on PB16 (code at `0x33862`, `0x35c64`, `0x36178`), but on this board those are encoder pins, so the stock code was built for another PCB layout. Phase 40 lost the pin levels with the cable in, and its ADC labels from `a8` on were one pin off (AIN11 = PA7 was read as `a8`; fixed in the switch probe table). Probe: PA0-PA5, PA8, PA9, PA12-PA15, PB18-PB20, PB22, one pin every 6 ms, read with pull-down / floating / pull-up / floating as 4 digits (`0000` driven low, `1111` driven high, `0011` not driven), ADC pins also floating in mV. Types over BLE only after 5 s without change, 3 spaces first: `n0 bat <mV>` + every pin once, then only changed pins (`a3x` = noisy, left out). Keeps the board awake. Test: BT position, battery **not full**, connected, text editor open; wait for `n0`, plug the cable, wait 10 s, unplug, wait 10 s, repeat; also with a charger instead of the Mac. SHA256 `d2a9634b33625fb40be6d808e140577d5afc2b17ae72f3f2ce524b1e638da23c` |
+| `bnk16-phase40c-pa6-range.bin` | **Tested 2026-11-03: PA6 = battery voltage / 2.** Battery side (lines every 3 s, mV): PA6 1967-1995, supply 3275-3283; cable in: PA6 2094-2100 (= 4.2 V, charger CV), supply unchanged; cable out: back to about 1975 at once. So PA6 (AIN10) is a 1:2 divider of the battery (the stock-code guess AIN12/PA8 was wrong); it is always on (no enable pin found), so it is part of the shutdown current. It is not a cable detector: it only jumps while the battery charges, and with a full battery cable in or out read the same. No other probed pin changed with the cable, so there is probably no VBUS pin. Phase 40b's PA6 1261 mV and supply 2479 mV mean the battery was at about 2.5 V then, nearly empty (LDO in dropout); the 8.8/8.4 mA and 61 uA readings of that day may have been taken at a low battery voltage. Earlier description: Probe changed to one line every 3 s with the range of those 3 s: `a6 <level flips> <PA6 min>-<max> vdd <min>-<max>` (mV). Normal timeouts, sleep report off. SHA256 `8e147a04e7465e59c8aeb33cd6fae18242ee1af79a7ad397598d988fae27bf35` |
+| `bnk16-phase40b-pa6-probe.bin` | **Tested 2026-11-03.** Lines only at start and after unplugging, none with the cable in (values apparently never stable for 3 s): `a6 1 1261 vdd 2479`, `a6 1 1282 vdd 2510`. PA6 is about half the supply, so a divider, most likely battery voltage (1:3 would give 3.8 V); its digital level is meaningless. Chip supply reads about 2.5 V (uncalibrated ADC conversion). Earlier description: `BNK16_VBUS_PROBE` (`bnk16_diag.c`), normal timeouts, sleep report off: types `a6 <level without pull> <PA6 mV> vdd <chip supply mV>` slowly over BLE, 3 s after each change. Goal: PA6 with and without cable, and the real supply voltage on battery. SHA256 `2eb07655a30cfaf7e19fbad13ffe97877de3003bc75cf7f5d280f94a895e74df` |
+| `bnk16-phase40-vbus-probe.bin` | **Tested 2026-11-03.** Without cable: `a6h` (PA6 tied high, even against its pull-down), a6 64 %, other pull-up pins 65-67 %. With cable: the start of every line was lost (typing during USB enumeration), all pull-up pins read 76 %. So PA6 with the cable is unknown, and the chip supply is about 15 % higher with the cable; converted with the SDK formula, 65 % = about 2.3 V and 76 % = about 3.2 V (to be confirmed by 40b). Source = the phase 39c tree with `BNK16_SWITCH_PROBE` on and `BNK16_POWER_TEST`/`BNK16_SLEEP_DIAG` off (the tree itself is left at the 39c settings). Goal: find a VBUS (or charger status) pin, so the board can skip the shutdown with a cable in. In BT position the probe's lines go over BLE: connect, wait for "start", plug and unplug the cable a few times. First candidate PA6 (read high in the earlier switch probe). SHA256 `1cec06227e4a693b48a8740da803d7e3a877ba638e419f386a2f458b59591ff2` |
+| `bnk16-phase39c-shutdown-pullups.bin` | **Tested 2026-11-03: shutdown 61 uA** (39b: 200 uA; 15 uA of it is battery side), so about 45 uA for the board. Wake-up by the left click works, report `b5`. The report typed right after the reconnect lost and mixed characters (diagnostic only). **Owner: no shutdown with a cable in, also in BT position.** The current rule only skips it while a USB host has enumerated the board and is awake (`usb_is_connected()`); a charger or a sleeping host still shut it down. Needs a VBUS pin, see phase 40. Previously: Phase 39b, but in shutdown PB11 floats (no pull-up, no wake) and encoder pins resting on a closed contact get a pull-down and do not wake, to remove pull-up current against GND. 30 s stages and sleep report still on. SHA256 `8876bcddb870ad2219153b23b1e74fbcfba459b8e99a6c8d473e81ee9b33d197` |
+| `bnk16-phase39b-shutdown-30s.bin` | **Tested 2026-11-03, works.** Stages 1-3 as expected; **shutdown 200 uA** (197 uA after 3 min, still drifting down slowly); wake-up by key, clicks, left and big knob works and reconnects, the small right knob does not wake (as expected), the waking key is not sent. Report after each wake-up `k00 b5` (keep register cleared by the shutdown, reset flag 5 = woken from shutdown). Suspected extra current: pull-ups against GND, PB11 (BT position) and closed encoder contacts. Phase 39 with the shutdown abort check limited to the armed wake-up pins, and breadcrumb `b7` when the shutdown is skipped for a moving key or knob. SHA256 `af130efb633191ca2b9f469b6e371bd152722717e5a691da0543e50a4629e6b6` |
+| `bnk16-phase39-shutdown-30s.bin` | **Tested 2026-11-03: the shutdown never happened.** Awake and light sleep stages as expected; at 90 s the board rebooted instead (`kb0 b0` = software reset from boot crumb): `bnk16_shutdown()` took its "edge already pending" exit, because it checked all of `R16_PB_INT_IF` and flags of unarmed port B pins latch too (likely PB10, low in layer switch positions 1-3). **Board current with the slide switch off: 15 uA** (battery side: protection circuit, charger leakage), so the 92 uA "chip off" floor includes it. Shutdown the way the stock firmware sleeps, with 30 s stages (`BNK16_POWER_TEST`) and the sleep report (`BNK16_SLEEP_DIAG`) on. Deep sleep code off (`BNK16_DEEP_SLEEP` off, `HAL_SLEEP 0`). See phase 4b "Shutdown build". SHA256 `d1dea229138e3bde9bc222239b577e217a48eafd03b2eee801610d22b0b0992d` |
+| `bnk16-phase38g-halt-diag.bin` | **Tested 2026-11-03: halt never woke up.** Deep sleep 1 (no chip sleep) fine, waking key typed; in deep sleep 2 the chip halted and did not wake on the RTC nor on a key, the board was dead until a power cycle. Phase 38f with `BNK16_SLEEP_HALT`: `CH58X_LowPower` halts (`LowPower_Halt_WFE`, crystal stopped until the early wake-up) instead of sleeping, so no power plan and no regulator change. Diagnostic as in 38e. SHA256 `68e0fffc5cad956985bea29337f00c00d8aac4a716589317f3567176a8fe7af1` |
+| `bnk16-phase38f-sleep-retention.bin` | **Tested 2026-11-03, no change: still loses power on the first real sleep** (`k00 b1` after the reboot). **Stock firmware analysis (same day):** its only `R16_POWER_PLAN` write is a shutdown routine at `0x1b1a8` (HSI 4 MHz, `R8_SLP_POWER_CTRL |= 0x40`, plan `rm | 0x9000` without core retention, WFI, then software reset via `R8_RST_WDOG_CTRL`). Connected it only idles with WFI (`0x1b182`). So stock never sleeps with the BLE link kept: its sleep is a shutdown, and a key reboots it. `0x3af20` is `PWR_PeriphWakeUpCfg`; its `R16_AUX_POWER_ADJ` writes are TX power code in the BLE library. Previously: Phase 38e with the port's extra `R8_SLP_POWER_CTRL |= 0x40` (RAM low voltage retention LPM_1, at the end of `SetSysClock` in `sdk/StdPeriphDriver/CH58x_sys.c`) removed. No official openwch/ch585 version (v1.3-v1.6) has that line; it is the only functional difference left between the port's drivers and the official ones (besides an older BLE library). SHA256 `6a80bc0800b9c3e43880856867c45b7c01db98c64d1a6fc26182133e2a01ef7e` |
+| `bnk16-phase38e-sleep-diag2.bin` | **Tested 2026-11-03: the real chip sleep kills the board.** Lines: `k00 b1 e0 x0 ...` (boot), `0 k00 b1 e1 x1 v426891 ...` (deep sleep 1 without chip sleep survived, the waking key `0` was typed), then about 35 s later a reboot with `k00 b1 e0 x0` = the keep register was wiped, so the chip really lost power on its first real sleep. Upstream NookCraftLab never ran real sleep either (their "sleep" is the WFI light sleep of phase 37, `HAL_SLEEP` off, `SLEEP.c` not compiled), and has no newer commits. Next reference if 38f fails: the stock firmware's sleep register values. Source as described: Phase 38d plus: the first deep sleep after boot runs with the chip's sleep vetoed (only pins, knob timer stop and the loop), from the second on the chip sleeps; breadcrumbs in `R8_GLOB_RESET_KEEP` (`DIAG_CRUMB_x` in `bnk16_diag.h`, reported as `k` = value found at boot, 00 = real power loss); a report line also 2 s after each deep sleep wake-up. SHA256 `7a1ce8d757259afc03f4e199c14cdaefadf8013d6af887a2815653518ae0128a` |
+| `bnk16-phase38d-sleep-diag.bin` | **Tested 2026-11-03: the board reboots at deep sleep entry**, also with the ammeter bridged (not a meter brown-out). Lines like `b1 e0 x0 v12054 s0 r0 p0 l0 t0 d00` once per 40-50 s cycle: `v` starts over each time, so counters reset = reboot; `b1` = reset flag "real power on"; `t0` = the link never ended before the reboot. Source as described: Phase 38c plus `BNK16_SLEEP_DIAG`: 5 s after every BLE connection it types one line of counters since boot (`b` reset cause, `e/x` deep sleep entries/exits, `v/s/r/p/l` how `CH58X_LowPower` ended, `t/d` links ended and the last HCI reason), see `bnk16_diag.c`. SHA256 `80e338cd1a08494ec2a1755a81c51e6c80689e68c670eed716376137bddfe248` |
+| `bnk16-phase38c-deepsleep-clock.bin` | **Tested 2026-11-03, worse.** Awake 17.8 mA; about 10 s into deep sleep the link drops, the board reconnects (blue flashing) and the cycle starts again, no stable current reading. Phase 38b (30 s stages) plus the BLE sleep clock config: `HAL_TimeInit` (`sdk/HAL/RTC.c`) now passes `bleClockConfig_t` as in the official CH585 EVT (RC accuracy 1000 ppm, frequency, max count, RTC callbacks) instead of `TMOS_TimerInit(0)`. Suspected cause of the link drops in 38b, and possibly of the old slave-latency drops. SHA256 `05f0d73949701c7e810c020cff69b049b070ca524e2972bb7175686a921b31e5` |
+| `bnk16-phase38b-deepsleep-30s.bin` | **Tested 2026-11-03, link drops.** Measured: awake 17.8 mA, deep sleep 15 ms 16.2 mA, deep sleep 100-120 ms 13.3 mA (worse than phase 37's 8.8/8.4). Wake-up by key and big knob works, but the BLE link had dropped (status LED blue = reconnected) and the waking key or knob step is not sent; same in stage 3. The high current: in deep sleep the loop skips WFI, so wherever TMOS does not sleep it spins at full speed. Previously: Phase 38 with `BNK16_POWER_TEST` on (`qmk_config.h`): deep sleep 30 s after the last key, interval 100-120 ms after 30 s more. For the current measurements only; switch it off for daily use. SHA256 `d429da10a6d9f44ff749d89b713233ef9e4f8204eb1288da3ecb324d0611def5` |
+| `bnk16-phase38-deepsleep.bin` | **Not tested on the board. Source uncommitted** (working tree on top of `7a37067`). Phase 37 plus real deep sleep, see phase 4b "Deep sleep build". SHA256 `8258f0c7eb1c6140d8186097012e84ed870d33445663822a30a5edcc0a1d0c69` |
+| `bnk16-phase37-power.bin` | **Not tested on the board as a whole.** Source = commit `7a37067`. Power work of phases 29-36 with final values and all diagnostics off: WFI between QMK tasks in BT position, LED supply (PA11) off in sleep, sleep after 5 min without a key, BLE 15 ms and 100-120 ms after 5 min asleep (10 min after the last key). Knob timer stays at 4 kHz. Expected: about 17.8 mA awake with LEDs off, 8.8 / 8.4 mA asleep. SHA256 `ac85a03c5f2d2370a4a9ed50404c9d446a94818ca3d1d050b226ff526003722a` |
+| `bnk16-phase36-power-diag2.bin` | **Diagnostic, tested 2026-11-03, source committed with the diagnostic switched off.** Phase 35, but the knob timer is slowed to 250 Hz after 2 min asleep instead of stopped (4 kHz again on wake), so the main loop keeps running. Measured (minutes after the last key): 17.8 / 8.8 / 8.4 / 7.3 mA (knob 250 Hz) / **92 uA with the chip off** = board floor (LDO, charger, LEDs with supply off). So about 7 mA of the sleep current is the CH585 idling in WFI at 62.4 MHz (plus USB?), and real sleep (`LowPower_Sleep` with key/knob pin wake) is the big win. Waking worked, but in the 250 Hz window the key that wakes the board is not typed (reproduced, Mac screen on); with 4 kHz (2-3 min) it is typed. Cause unknown, so 250 Hz stays diagnostic only |
+| `bnk16-phase35-power-diag.bin` | **Diagnostic, tested 2026-11-03, source not committed (phase 36 replaced the knob stop).** Lowest radio step removed: only 15 ms and 100-120 ms (after 1 min asleep). `BNK16_POWER_DIAG`: knob timer stopped after 2 min asleep, chip off after 3 min. Measured (minutes after the last key): awake LEDs off 17.8 mA, asleep 15 ms 8.8, asleep 100-120 ms 8.5, knob timer stopped 6.9, then 6.9. No wake-up after the knob timer stopped: TMR2 was the only interrupt that woke the main loop from WFI, so the loop stopped and the chip-off stage was never reached. 6.9 mA is CPU in WFI + radio + board, not the board floor |
+| `bnk16-phase34-interval-debug3.bin` | **Diagnostic, tested 2026-11-03 (`s1 n2 r0 m816 u4 i816 l0 t500`: the link really ran at 1020 ms asleep), source not committed.** Phase 31 + `BNK16_INTERVAL_DEBUG`: types ` start` 3 s after connecting, then a line with the requested and real BLE interval 10 s after a key press, once the link is fast again (format in `bnk16_diag.c`) |
+| `bnk16-phase33-interval-debug2.bin` | Not tested. Same as phase 34, but reports 0.5 s after the key, so waking from the low step will garble it. Superseded |
+| `bnk16-phase32-interval-debug.bin` | Typed nothing on the first run, cause not found, worked on the second: one wake-up gave about 25 repeats of a single key press, and the report typed 0.5 s later lost characters. Superseded |
+| `bnk16-phase31-intervals.bin` | **Tested: no link drop, no change in current at any step** (17.8 mA awake, 8.8 mA asleep). Source not committed. Phase 30 with three interval levels instead of four: 15 ms, then 100-120 ms after 1 min asleep, 1000-1020 ms after 2 min asleep (short test timings). Requests with min = max above 15 ms replaced by ranges, per Apple's guidelines. Wake-up request is retried if the 5 s limit dropped it, which could leave an awake board on the slow interval. May drop the link: slave latency 30 (465 ms) did |
+| `bnk16-phase30-sleep1min.bin` | **Not tested on the board, source not committed.** Phase 29 with the sleep timeout at 1 min instead of 10, for power testing (`POWER_SLEEP_TIMEOUT_MS`). Decide the final value later |
+| `bnk16-phase29-power1.bin` | **Normal use and current measured on the board; waking from sleep and long idle not tested yet.** Source not committed. Phase 28 + first power step. In BT position QMK runs every 1 ms (every 4 ms in sleep) and the core waits in `__WFI()` in between; USB position unchanged. In sleep the LED supply PA11 is off and no frames are sent (`ws2812_power_block`) |
+| `bnk16-phase28-ble-media.bin` | **Latest build confirmed on the board** (BT and USB, also after a power cycle without re-pairing). Hosts paired before this build must forget and re-pair. Phase 27 + media keys, system control, mouse and wheel over BLE. Report IDs as in QMK (keyboard/LED 1, mouse 2, system 3, consumer 4; battery reference moved from 4 to 5), keyboard range widened to 255, unused feature report removed, NKRO on in BT sends the first 6 keys instead of nothing. Source: commit `fd50ff3` |
+| `bnk16-phase27-bt-latency0.bin` | **Confirmed on the board** (2 and 12 min idle without a drop, key works at once, macro still fast). Phase 26 with BLE slave latency 0 instead of 30, to stop the link drop about 7 s after the last key (suspected: internal 32 kHz RC drift). The radio now wakes every 15 ms while idle, so idle power needs its own solution in the power step |
+| `bnk16-phase26-bt-speed.bin` | **Macro speed and LEDs confirmed on the board. Bug: BT link drops about 7 s after the last key.** Phase 25 + faster: active BLE interval 15 ms with latency 30 (was 100 ms, 0), 3 packets per event, `TAP_CODE_DELAY` 10 ms (was 30). LEDs keep animating during BT macros. `WIRED_MODE` key removed, so custom keycode indices after `BT_CLEAR` moved down by one |
+| `bnk16-phase25-bt-macro.bin` | **Long macros confirmed on the board over BT and USB, but slow.** Phase 24 with the QMK task moved from a TMOS event to the main loop; `wait_ms` keeps TMOS running in BT mode, and BLE key reports wait up to 500 ms for a free buffer |
+| `bnk16-phase24-bt-unplug.bin` | **Confirmed on the board: keys keep working after pulling the cable.** Phase 23 with the MCU halt on USB suspend removed (`ch585_usbhs_device.c`), which ran when the host had enabled remote wakeup; a pulled cable looks like a suspend. Open bug: a long macro over BT blocks the main loop and drops the link |
+| `bnk16-phase23-bt-step1.bin` | **Pairing, reconnect, typing, slide switch confirmed on the board.** Keys stop after USB was used and the cable is pulled in BT position. Phase 22 + first Bluetooth connection fixes. Slide switch PB11 is the only authority on the mode (low = BT, high = USB, debounced 50 ms, works with a cable in; Vial over USB keeps working in BT position). Saved mode removed, only the slot is restored. `BT_1`/`BT_2`/`BT_3` in the top row of layer 3; they do nothing in USB position, `USB` key has no function. Bond table moved out of Vial's macro area to data flash `0x500`, saved deferred and only on a change, slot counts as paired only after pairing succeeded. Static addresses valid in both byte orders (LSB first in the stack), checked `GAP_ConfigDeviceAddr`, slot started on `GAPROLE_STARTED`, advertising stopped before a slot change. Pairing and reconnect states kept, 30 s reconnect timeout now really called (from housekeeping), then standby, any key restarts. Slot without a bond opens for pairing (3 min). `BT_CLEAR` erases the stack's bonds after the link is down. Names `BNK16 BT1/2/3`, device info `Vialpad` / `BNK16` |
+| `bnk16-phase10-usbstate.bin` | **Current firmware build** (227,072 B), flash with `wchisp`. phase9 + USB detection read from the USBHS driver. **Confirmed on the board** (LED flash gone, status LED green with cable, orange without) |
+| `bnk16-phase9-ledfix.bin` | WS2812 frame start fix (**confirmed: the flash is gone**). Status LED is always orange here, because `usb_is_connected()` never became true |
+| `bnk16-phase8-clicks.bin` | Previous build (226,988 B). Everything listed under "Current state" works with it; all LEDs flash brighter for a moment every few seconds |
+| `bnk16-phase7-click-debug.bin` | Diagnostic build (`#define BNK16_ENCODER_DEBUG`): LEDs 0-5 show the raw encoder pin levels, LEDs 8/9 the matrix state of the clicks, LED 10 the click row level; every 100 ms it tests columns 0/1 against all free pins in both directions and types hits over USB (`b21>c0 `; on a German layout `>` appears as `:`). Found the click row PB21. Note: built while the row was still configured as PB20 |
+| `bnk16-phase3-enc-rgb.bin` … `bnk16-phase7-enc.bin` | Older intermediate builds, superseded |
+| `bnk16-phase10-layerswitch.bin` | Superseded. Phase 9 + layer logic: position (none / (0,4) / (1,4) / both) = layer 0/1/2/3 via `layer_move()` on change (`layer_switch_task` in `bnk16.c`). PB11 (BT/USB slide switch) read with pull-up; temporary: status LED white while PB11 is low (low = BT, measured). Layer switch confirmed working. **Open bug: pressing a key in column 0 or 1 also triggers the other column (in all rows), e.g. 7 gives 78; cause unknown. Not seen in the earlier probe build (`m40` alone).** |
+| `bnk16-phase9-layerswitch-matrix.bin` | Phase 8 + 4-position layer switch wired into the matrix: PB10 = column 4 (switch common, traced on the PCB), its two diode lines go to rows 0 (PB3) and 1 (PB2), so the position reads as matrix (0,4)/(1,4) (`KC_NO` in the keymap, visible in the Vial matrix tester). USB switched to HS only (`usb_config.h`), because the FS port claimed PB10/PB11. No layer logic yet. **Not tested on the board yet.** |
+| `bnk16-switch-probe.bin` | Diagnostic build for the 4-position layer switch, BLE/wired switch and haptics switch: 5 s after boot it types "start", then one line per stable change: running number + tokens. `a5l` = pin low with pull-up (to GND), `a5h` = high with pull-down (to VCC), `a5xb19` = the two pins are connected (also against matrix rows/cols and encoder pins), `m42` = matrix position (4,2) on, `a6v78` = ADC value of a6 in % of the ADC range (shown for pins tied high and pins that changed since start). First run: only `a6h a7h`, nothing reacted to the switches digitally; `leer` = nothing. Enable with `#define BNK16_SWITCH_PROBE` (commented out in `qmk_config.h`) |
+| `bnk16-pinscan.bin` | Diagnostic build: 20 s after boot it drives each free pin high then low for 5 s and types the pin name ("a11 h ") over USB. Used to find the LED enable. Enable in source with `#define BNK16_PIN_SCAN` (commented out in `qmk_config.h`) |
+| `bnk16-haptic-scan.bin` | Diagnostic build to find the haptic drive pin: 5 s after boot each candidate pin (bnk16-pinscan list + PA11, PB20) goes high for 1 s ("a5 h "), then a 170-250 Hz square wave for 1 s ("a5 p "), name typed over USB. **Result: PA7, only in the buzz step** |
+| `bnk16-phase12-haptic.bin` | Superseded. 40 ms, 250 Hz burst on PA7 on each key press and small encoder click |
+| `bnk16-phase22-led-status.bin` | **Not tested on the board.** Phase 21 + LED rework. Keys: overlay after the effect (`rgb_matrix_indicators_advanced_user`): own colour (brake, `Knob-`/`Knob+`, selected BT device) > dark if `KC_NO` and mask on > effect; all colours follow the Vial brightness; new User tab key `LedMsk` toggles the mask (stored in a spare bit of the haptic word, default on, survives `HptRs`). Layers 1-3 are now `KC_NO`, encoder rotation and clicks stay transparent. Status LED: layer colour white/purple/orange/green for layers 0-3, always on with USB, 10 s on battery; fast blue blink = pairing, slow = searching, solid blue 2 s = connected, 3 red flashes = failed, white flashes = mobile mode on (2) / off (1). LEDs deactivated in Vial: `leds_off_task` keeps special keys and status LED lit (brightness 0 turns them off). All LEDs off in `power_management.c` sleep (`RGB_MATRIX_SLEEP`). BT parts untested until Bluetooth is brought up |
+| `bnk16-phase21-knob-19ms.bin` | **Not tested.** Phase 20 with the knob key limit at 19 ms (about 53 per s) |
+| `bnk16-phase20-knob-colors.bin` | **Key colours work on the board, 12 ms limit too fast (volume delay returns).** Phase 19 + knob key limit 12 ms (about 83 per s, 25 ms was too slow on the board); `Knob-`/`Knob+` keys fade from green to red as they near the end of their range (red = at the limit) |
+| `bnk16-phase19-knob-res.bin` | **Works on the board, speed limit too slow.** Big knob resolution set with Vial keys `Knob-`/`Knob+` (1-8 steps per key press, default 2 = 40 per turn, saved in EEPROM; they replace `HptS-`/`HptS+` at the same keycode indices). One haptic burst per key actually queued, dropped steps give none. Keys at least 25 ms apart (`BNK16_BIG_MIN_KEY_INTERVAL_MS`, 40 per s), faster steps are dropped; encoder queue size 16 -> 4. Magic 0xA9, so stored haptic settings reset to the defaults on first boot |
+| `bnk16-phase18-knob-half.bin` | **Not tested.** Phase 17 + big knob sends one key press per 2 steps (`BNK16_BIG_STEPS_PER_KEY`, 40 per turn) to reduce volume run-on on macOS; a change of direction restarts the count; haptics still count all 80 steps |
+| `bnk16-phase17-haptic-defaults.bin` | **Not tested.** Phase 16b + haptic defaults 128 Hz, 2 pulses, 1 step per click, brake on; software haptic on/off removed (hardware switch only; the firmware cannot see it); new User tab key `HptRs` resets all haptic settings. Custom keycode indices after the BT ones shifted by one (HptF- is now index 7). Stored word layout changed (magic 0xA8), so settings reset to the new defaults on first boot |
+| `bnk16-phase16b-knob.bin` | **Works on the board.** Phase 16 with the `amoswap` instruction removed (the knob step count is now taken with the TMR2 interrupt masked), which fixed the dead board. 4 kHz knob sampling in a TMR2 interrupt, haptic counted at the knob, brake LED |
+| `bnk16-phase16-knob.bin` | **Dead on the board** (not detected by Vial, no LEDs, no keys). It used `amoswap.w` in `matrix_scan_kb`; removing it (16b) fixed it, so this core or RAM does not run that instruction. Avoid atomic instructions. Phase 15 + big knob sampled at 4 kHz in a TMR2 interrupt (steps counted there, handed to QMK's encoder queue and the haptics from `matrix_scan_kb`; QMK's own decoder no longer sees the big knob). Reason: QMK's encoder map waited 2 x 30 ms per step in the main loop, so fast turns lost quadrature states (wrong direction) and the 4-entry queue overflowed. Now `ENCODER_MAP_KEY_DELAY 2`, queue 16. Haptic click counted when the step is captured, not when the key report is sent. The key that holds the brake toggle lights red (brake on) or green (off). **Not tested on the board yet** |
+| `bnk16-phase15-detent.bin` | Haptics reworked: one burst per N big knob steps (default 2, direction change restarts the count), first push starts at once (no half-period delay), length counted in push pulses (1 = a single 3.9 ms push at 128 Hz, default 2), optional brake (two idle half-periods, then one push half a period out of phase). New User tab keys: brake on/off, steps per burst 1-8. Stored word has a new layout with a magic byte, so older saved haptic settings fall back to the defaults. **Not tested on the board yet** |
+| `bnk16-phase14-haptic-keys.bin` | Phase 13 + Vial User tab keycodes for big knob haptics: on/off, frequency 64-256 Hz (8 Hz steps), length 1-16 cycles, saved in EEPROM (`eeconfig_kb`). **Not tested on the board yet** |
+| `bnk16-phase13-vialpad.bin` | Haptics only on big knob steps (4 cycles at 128 Hz on PA7), USB `5650:0b16`, strings Vialpad / BNK16, keymap renamed to `vial`, new encoder defaults. **Not tested on the board yet.** Before this the HS port actually used the hard-coded `1a86:fe00` and strings wch.cn / CH585, not the `1209:0001` from the config |
+| `BNK16-Pinbelegung.txt` | Pin map read from the stock firmware, with a confidence level per pin (in German) |
+| `BNK16-CONFIG(USB).json` / `BNK16-CONFIG (Wireless).json` | Stock VIA definitions. PID `0xFC16` (USB variant) vs `0xFE16` (wireless variant). **The board currently enumerates as `0xFE16`**, so the wireless JSON is the one that matches. |
+| `wchisp-macos-arm64/wchisp` | WCH ISP tool, works with this chip |
+| `vial-build/ch585-qmk-vial/` | Clone of NookCraftLab/ch585-qmk-vial (with its QMK submodule). Our board target is `firmware/ch585_v2/qmk_porting/keyboards/bnk16/`; build script `firmware/ch585_v2/build-bnk16.sh` (output in `firmware/ch585_v2/build-bnk16/bnk16.bin`). Since 2026-10-30 this is our repo `BNK16-vial` (local; remote `upstream` = NookCraftLab). |
+
+Build command (Docker Desktop must be running):
+```
+cd vial-build/ch585-qmk-vial && docker run --rm --platform linux/amd64 -v "$PWD:/workspace" nookcraftlab/riscv:latest bash /workspace/firmware/ch585_v2/build-bnk16.sh
+```
+Flash: hold BOOT (PB22) while plugging in USB, then `wchisp flash vial-build/ch585-qmk-vial/firmware/ch585_v2/build-bnk16/bnk16.bin`.
+
+---
+
+## 2. Chip and ISP (from `wchisp info`)
+
+- **Chip:** CH585 (`0x8516`), 448 KB code flash, 32 KB data EEPROM. UID `69-15-DE-62-32-DC-79-54`
+- **ROM ISP bootloader:** v02.30. It is in mask ROM and cannot be overwritten, so the board is effectively unbrickable.
+  - `DOWNLOAD_CFG` = PB22. Hold the BOOT key/pad (PB22) while plugging in USB; the board then enumerates as `1a86:55e0`.
+  - ISP mode times out quickly, so run `wchisp` right after plugging in.
+- **Config register:** `USER_CFG = 0x4FFF0F4D`
+  - `CFG_ROM_READ = 0` → **the programmer cannot read code flash back.** The data EEPROM is still readable (dump worked).
+  - `CFG_DEBUG_EN = 0` → SWD/debug disabled. It can be enabled for our own firmware later (needs a WCH-LinkE).
+  - `CFG_BOOT_EN = 1`, `CFG_RESET_EN = 1`
+  - **Do not run `wchisp config …`** without a reason. Changing the protection may trigger a full erase.
+- **How wchisp erases before flashing:** `len/1024 + 1` sectors of 1 KB from `0x0`, minimum 8 sectors (8 KB). `wchisp erase` wipes everything.
+- **`verify`: tested, does not work as an oracle.** A small Python/pyusb tool (speaks the ISP protocol: identify, ISP key, verify) was written and run against the stock board. Every verify (all lengths 1–112 bytes, addresses `0x0`, `0x18000`, `0x19000`, `0x20000`, `0x5e000`, matching and one-bit-flipped data) returned fail (`0xfe`); one odd `0x35` reply never reproduced. Most likely verify is blocked while `CFG_ROM_READ=0`. So the locked bootloader cannot be dumped this way, and "board runs exactly 1.7.141" cannot be verified either.
+
+---
+
+## 3. Stock firmware
+
+### Flash layout
+| Range | Content |
+|---|---|
+| `0x00000–0x17FFF` (96 KB) | Binepad/OEM bootloader: MCUboot + UF2 mass-storage drive, signature-checking. **Not available; read-protected.** |
+| `0x18000` | MCUboot image header (magic `0x96f3b83d`, `hdr_size 0x1000`, `img_size 0x45218`, version 1.7.141) |
+| `0x19000` | App entry (`j` to reset handler at `0x1b528`), vector table from `0x19004` |
+| `…0x5E2B3` | End of image + TLVs: SHA256 (`0x10`, checks out), key hash (`0x01`), **ECDSA-P256 signature** (`0x22`) |
+| Data flash (EEPROM) | App settings (code refs `0x70000–0x78000`, settings at `0x70800`) |
+
+- UF2 family ID `0x1aa143c7`, the same as [O-H-M2/qmk_port_ch582](https://github.com/O-H-M2/qmk_port_ch582); the MCUboot header size `0x1000` is also the same. The bootloader is clearly derived from O-H-M2's MCUboot/UF2 bootloader, adapted for CH585: moved to 96 KB, app at `0x18000`, EC256 signing instead of none/RSA. **Stock UF2 drag-and-drop will reject unsigned images.**
+- USB vendor string `"yukeboard"` → an OEM firmware house. USB: VID `0x1A86`, PID `0xFE16`, serial `0123456789`, **High-Speed 480 Mbit/s → uses the CH585 USBHS port**.
+- WCH BLE lib `CH58x_BLE_LIB_V2.10`, build string `2026-09-25-R112`. The app uses only 32 KB RAM (sp = `0x20008000`).
+- The fork session found that the app is **QMK-based** (unmodified QMK encoder driver/LUT, strings stripped).
+- Code is plain, not encrypted. Disassemble as RV32IMAC little-endian, image file offset `0x1000` = address `0x19000`. Capstone 5 works; for Ghidra use `RISCV:LE:32:default`. `morluto/rea` does **not** support raw RISC-V, so don't use it.
+
+### Stub restore analysis
+- The startup at `0x1b528` is self-contained: it sets gp/sp, copies highcode (vector table + ISRs, `0x19004–0x1b528`) to RAM `0x20000000`, copies .data, zeroes .bss, writes CSR `0xBC0=0x1F` and `0x804 (INTSYSCR)=3`, sets `mstatus=0x1888`, `mtvec=0x20000000|3`, and `mret`s to main at `0x364ae`. Re-checked instruction by instruction on 2026-11-03: the jump at `0x0` (`0x0001906f`) lands on `0x19000`, which jumps to the reset handler `0x1b528`; the reset handler and `main`'s first steps set up the system clock themselves. All copy sources are inside the flashed image. Nothing here needs the old bootloader.
+- Scanned every `lui/auipc` pair, branch and jump in both flash code and the RAM highcode: **no references into `0x0–0x18FFF`.** Literal pools hold no plausible pointers there. The normal boot path does not touch the reset-to-IAP code (only bootmagic / a keycode / a timed path do), so a missing bootloader does not cause a reboot loop on its own.
+- **Test result (2026-11-03): flashing the stub leaves the board dead — no USB, not seen by stock VIA — and it stays dead after `wchisp eeprom write bnk16-eeprom.bin` restores the stock data flash.** Because the stub mechanics are sound, the remaining explanation is the hardware mismatch already documented in section 4: this downloaded 1.7.141 release targets a different PCB revision (it drives LED power and the matrix/encoder pins on the wrong pins), so even a clean boot gives no LEDs and no keys, and its board init likely stalls or selects the wrong USB/wireless mode before enumerating. The build that actually shipped on this board is a different one, locked inside the read-protected stock bootloader and unrecoverable.
+- Conclusion: **there is no working way back to stock on this board (likely a first-revision PCB) with the files we have.** A real factory image for the exact hardware revision would have to come from Binepad. Our own Vial firmware is the only firmware confirmed to run correctly here, and it is always recoverable via ROM ISP (hold PB22 while plugging in).
+- Known loss with the stub even if it had booted: the "Update/upgrade mode" key has no bootloader to go to, so updates only work via `wchisp`.
+
+### EEPROM dump contents (offsets relative to the start of data flash)
+| Offset | Content |
+|---|---|
+| `0x0000` | single byte `0xBA` (flag) |
+| `0x3300` | `"MK"` table (macros/combos?) |
+| `0x4000–0x43xx` | Keymap layers, 16-bit VIA keycodes (`0x5F` = KC_P7 …), encoder maps with custom keycodes `0x7E00–0x7E06` |
+| `0x4C00` | `"KY"` settings block (lighting/haptics?) |
+| `0x6000` | Device config: magic `5AA5`, name "BNK 16", chip UID, BLE name |
+| `0x7800–end` | WCH BLE SNV: bonding keys |
+
+Restore: `wchisp eeprom write <file>` (check `wchisp eeprom --help`). When going back to stock after Vial, erase or restore the EEPROM first.
+
+---
+
+## 4. Hardware / pin map (summary of `BNK16-Pinbelegung.txt`)
+
+**Measured on the board (2026-10-29), confirmed working in the firmware:**
+
+| Function | Pins | Status |
+|---|---|---|
+| Matrix rows 0–3 | PB3, PB2, PB0, PB1 | **measured, keys work** |
+| Matrix row 4 (encoder clicks) | PB21 | **found with the click probe build** (first hand measurement said PB20, which was wrong); diode is COL2ROW |
+| Matrix cols 0–3 | PB5, PB4, PB6, PB7 | **measured, keys work** |
+| Diode direction | `COL2ROW` | **works** (`ROW2COL` gave no keys at all) |
+| Encoder clicks | small left = (4,0) = PB21 x col0 (PB5), small right = (4,1) = PB21 x col1 (PB4) | **works**; big knob has **no** switch |
+| Encoder rotation, small left | A = PB14, B = PB15 | **works** (20 detents, resolution 4) |
+| Encoder rotation, small right | A = PB17, B = PB16 | **works** (20 detents, resolution 4) |
+| Encoder rotation, big knob | A = **PB8**, B = **PB9** | **works**; no detents, 20 quadrature cycles per turn, resolution 1 (80 steps per turn, default 40 key presses per turn, adjustable since phase 19) with direction hysteresis in `bnk16.c`. A/B had to be swapped from the first guess |
+| LED data (WS2812, 17 LEDs) | PA10 (TMR1 PWM + DMA) | **works** |
+| LED supply enable | **PA11**, high = on | **works**; found with a pin-scan test firmware. The stock firmware's LED power routine switches PB8 instead (measured 3.3 V there, no effect), the stock pin reading was misleading again. The MOSFET `A5SHB` is presumably the supply switch |
+
+**Still unknown / not measured (open work):**
+
+| Function | Candidate from stock code | Status |
+|---|---|---|
+| USB/BT mode switch | PB15 | **traced on the PCB (2026-10-29)**: one pole to **PB11**, the other pole cuts battery + (hardware power switch). PB11 needs USB FS off. **Measured: PB11 low = BT position** |
+| VBUS detect | PB14 | **void**: PB14 is encoder A |
+| Charger status | PB16 | **void**: PB16 is encoder B |
+| Battery ADC | AIN12, enable PB17 | **void for PB17** (encoder A); AIN12 pin not checked |
+| 4-position layer switch | PB0+PB1 | **traced on the PCB (2026-10-29)**: common = PB10 (matrix column 4), two lines via diodes to PB3 (row 0) and PB2 (row 1) → matrix (0,4)/(1,4). Needs USB FS off (PB10/PB11). Position-to-bit table still to be measured |
+| Haptics | **PA7**, measured with the scan: vibrates on a 170-250 Hz square wave, not on steady high; idle level high (external pull-up seen in the switch probe), so presumably low = on via the 3401 P-MOSFET | haptics on/off switch traced: one pin GND, the other to the drain of the 3401; no MCU pin, hardware only |
+| Debug UART | PA9/PA8 | unverified (the port also uses it for debug prints) |
+| PB8 | stock LED power routine drives it (high = on), 3.3 V measured | **solved**: big encoder A (input with pull-up, hence 3.3 V) |
+
+**Why the stock-code pin map was wrong:** the tables read from the stock disassembly are bit masks, and every row/column/encoder entry was interpreted as port A or port B from the flag bit. Matrix and encoders came out inconsistent with the PCB (the matrix is on PB, the code pointed to PA). The contradiction was never resolved; possible causes are a misread port flag, or that the downloaded 1.7.141 is not exactly what the board ran. Treat everything in `BNK16-Pinbelegung.txt` marked as stock-derived as unreliable.
+
+QMK values in the current `bnk16` target (`qmk_config.h`):
+```c
+#define MATRIX_ROWS 5
+#define MATRIX_COLS 4
+#define MATRIX_ROW_PINS { B3, B2, B0, B1, B21 }
+#define MATRIX_COL_PINS { B5, B4, B6, B7 }
+#define DIODE_DIRECTION COL2ROW
+#define VENDOR_ID 0x5650   // self-chosen, not registered, private use
+#define PRODUCT_ID 0x0B16
+#define DYNAMIC_KEYMAP_LAYER_COUNT 4
+// VIAL_INSECURE removed in phase 43: secure mode, unlock combo (0,0)+(0,3)
+```
+Layout in `bnk16.h`: `LAYOUT(K00..K33, K40, K41)` (16 keys + 2 clicks). `vial.json` has `"lighting": "vialrgb"` and the rotation entries of all 3 encoders: each small encoder sits right of the key block with its click between ccw/cw, the big one below them.
+
+Encoders and RGB in `qmk_config.h` / `rules.cmake` (all in the bnk16 target):
+```c
+#define ENCODER_A_PINS { B14, B17, B8 }   // small left, small right, big
+#define ENCODER_B_PINS { B15, B16, B9 }
+#define ENCODER_RESOLUTIONS { 4, 4, 1 }
+#define WS2812_DI_PIN A10
+#define WS2812_EN_PIN A11          // LED supply, high = on
+#define WS2812_EN_LEVEL 1
+#define WS2812_PWM_TARGET_PERIOD 800000
+#define RGB_MATRIX_LED_COUNT 17
+#define BNK16_STATUS_LED 16        // assumed last in the chain
+#define RGB_MATRIX_KEYPRESSES      // + all SOLID_REACTIVE* and *SPLASH effects enabled
+#define TAP_CODE_DELAY 10          // was 30; the USB and BLE send paths wait for a free buffer
+```
+`rules.cmake`: `ENCODER_ENABLE`/`ENCODER_MAP_ENABLE` ON, `RGB_MATRIX_ENABLE` ON, `WS2812_DRIVER "pwm"`, `VIALRGB_ENABLE` ON. Key LEDs 0-15 are row-major (matrix row × 4 + col); the status LED (index 16) has `LED_FLAG_NONE`, so effects never touch it. `bnk16.c` colours it from `rgb_matrix_indicators_advanced_user` (since phase 22 layer and BT state, see the file table; before that green = USB enumerated by a host (`usb_is_connected()`), blue = BLE connected, dim orange otherwise). Before phase 9 it used `wired_mode_active`, which is the *remembered* mode: after a boot on battery that restored wired mode it stayed green although no USB was there. There is no VBUS pin in use; the board cannot tell cable from battery except by USB enumeration, and the mode logic (`ble_restore_last_mode`) still restores wired mode on battery. **The port never calls `usb_device_state_set_configuration()`**, so QMK's `usb_device_state_get_configure_state()` is always INIT (also why the port's suspend handling in `usb_main.c` never runs). Since phase 10 `usb_is_connected()` reads `USBHS_DevEnumStatus` (set by SET_CONFIGURATION, cleared on bus reset) and bit 1 of `USBHS_DevSleepStatus` (bus suspend, which is also what an unplugged cable looks like). This also makes the plug/unplug handling in `housekeeping_task_kb` work for the first time: plugging in calls `enter_wired_mode()` (stops BLE advertising, saves the mode to flash), unplugging calls `exit_wired_mode()`. The default encoder map (keymap.c) is left = volume, right = page up/down, big = mouse wheel; default clicks are Mute (left) and Play/Pause (right).
+
+Board code in `bnk16.c` beyond the EVB copy:
+- At boot: SWD debug disabled (`RB_DEBUG_DIS`, PB14/PB15 are also TIO/TCK), digital input enabled on all encoder pins (PB16+ have their own disable bits in `R16_PIN_CONFIG`), RF antenna switch outputs (PB16-PB21), I2C and UART3 remaps on PB20/PB21 kept off (the antenna switch bit is also cleared in `housekeeping_task_kb`).
+- Big knob: `matrix_scan_kb` tracks the raw quadrature position every scan, a filtered position follows it immediately in the current direction but only after two quarter steps against it; QMK's decoder reads the filtered position as Gray code via overridden `encoder_quadrature_read_pin`. This removes contact-bounce reversals (a time-based debounce was tried first and lost states when turning fast).
+
+### Port fixes (changes in the clone, outside the bnk16 target)
+- **WS2812** `qmk_porting/drivers/ws2812/ws2812_pwm.c` was written for an old QMK API and had never been built. Rewritten to the current `ws2812_set_color/_set_color_all/_flush` API. `TMR1_PWMInit` in this SDK does **not** start the timer: the driver must also call `TMR1_PWMEnable()` and `TMR1_Enable()`. The driver default bit clock was 10× too slow; the board config sets 800 kHz. Later changed from loop DMA + clock gating in the ISR to **single-shot DMA** (restarted per frame): with loop DMA a late interrupt could freeze the timer mid-bit and garble the next frame, a likely cause of the "LEDs blink wildly after ~30 s" effect seen once (not seen again since). **Phase 9:** the DMA was restarted while the timer kept running; at an unlucky moment within a bit period the first data bit got no pulse, the frame shifted one bit left and all LEDs showed about double brightness for one frame (seen every few seconds, in the BLE advertising rhythm on battery). Now `ws2812_start_frame()` clears and stops the timer, sets up the DMA, then starts the timer, and the buffer starts with 2 zero-duty lead-in periods.
+- `common_features.cmake`: added `drivers/led` to the include path, `process_underglow.c` (missing link symbol), and `vialrgb.c` + `-DVIALRGB_ENABLE` under `VIAL_ENABLE`.
+- The port's `extra_indicator.c` already defines `rgb_matrix_indicators_advanced_kb`; board code must use the `_user` hook.
+- **USB keyboard endpoint polled every 64 ms:** `bInterval 0x0A` on the HS keyboard endpoint is an exponent (2^9 × 125 µs), not 10 ms. A second report within that time was dropped (`USBHS_Endp_DataUp` returns 0 while busy), so e.g. `LSA(kc)` (mods report, then mods + key) only sent the modifiers. Now `bInterval 0x04` = 1 ms (`user/usb/usb_desc.c`; FS descriptor 1 ms), and `qmk_porting/protocol/usb_interface.c` waits up to 8 ms for a free endpoint before sending (HS and FS). `TAP_CODE_DELAY 30` is still set and harmless.
+- **No media keys / mouse over USB:** `hid_exkey_send_report()` was an empty stub, and interface 1 was a boot mouse without report IDs. Interface 1 is now a shared HID interface (subclass/protocol 0) with report IDs 2 = mouse (8 buttons, X, Y, wheel, AC pan), 3 = system control, 4 = consumer, matching QMK's `REPORT_ID_*`; the descriptor (107 B) is in `usb_desc.c` and `ch585_usbfs_device.c`, `DEF_USBD_REPORT_DESC_LEN_MS` updated, `USBFS_SendExtraReport()` added. `EXTRAKEY_ENABLE`/`MOUSEKEY_ENABLE` were on all along.
+- The port starts WCH's own BLE stack (`qmk_porting/ble/ble_app.c`) in every mode, independent of QMK's `BLE_ENABLE`, which must stay off: it would also enable 32 kHz crystal mode, and PA10/PA11 drive the LEDs here. In wired mode the radio stays off.
+- **QMK task runs in the main loop** (`usb_run_qmk_task`, called from `platform_run` in `protocol_usb.c`), no longer as a TMOS event. `wait_ms` is `ble_wait_ms`: in BT mode it keeps TMOS and `rgb_matrix_task` running, so a long macro does not drop the link. BLE key reports wait up to 500 ms for a free buffer.
+- **MCU halt on USB suspend removed** (`ch585_usbhs_device.c`): it stopped the whole chip when the host had enabled remote wakeup, and a pulled cable looks like a suspend.
+- Every flash resets the stored Vial keymap to the defaults (VIA's EEPROM check uses the build date).
+
+Firmware changes versus the EVB target worth knowing: `led_indicator.c` is a no-op (the EVB drove PB14/PB15 as LEDs), PA11 (LED supply) is driven to its "off" level at start (`bnk16.c`) and then owned by the RGB driver, and the HSE load capacitor is still the EVB value of 18 pF (`platform.c`; works, USB enumerates).
+
+---
+
+## 5. Firmware base options
+
+| Project | Chip | Notes |
+|---|---|---|
+| **[NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch585-qmk-vial)** ← chosen base | CH585 | Vial over Raw HID, USB HS+FS, BLE multi-device, sleep. 2.4G is work in progress. Targets the WCH EVB only. Docker build (`nookcraftlab/riscv:latest`, `firmware/ch585_v2/build.sh`). Uses the [NookCraftLab/qmk_firmware](https://github.com/NookCraftLab/qmk_firmware) fork + [openwch/ch585](https://github.com/openwch/ch585) SDK. Closed `libCH58xBLE.a`. Young project (~2 stars). |
+| [O-H-M2/qmk_port_ch582](https://github.com/O-H-M2/qmk_port_ch582) | CH582 only | VIA, not Vial. Wireless WIP, wireless lib missing (#179), `via` branch reportedly broken (#178). **Useful for its open MCUboot + UF2 bootloader** (`mcuboot_porting/`, `qmk_porting/platforms/ch58x/IAP/uf2.c`; layout there: 72 KB bootloader, app at `0x13000`, `imgtool --header-size 0x1000`). |
+| [openwch/ch585](https://github.com/openwch/ch585) | CH585 | Official SDK/EVT, includes HID keyboard examples. Fallback for a minimal non-QMK firmware. |
+
+---
+
+## 6. Plan: getting Vial running
+
+### Phase 0: Before the first flash (DONE, except the optional parts)
+1. **Measure the whole pin map by hand (all pins, not just the unclear ones)** with a multimeter: the layer switch (PB0/PB1?), PB15 polarity (which position is USB), the encoder click positions (4,0)/(4,1), and the purpose of PB8.
+2. ~~ISP verify tool / 1-byte oracle~~ **Tested, does not work** (see section 2). Not possible while `CFG_ROM_READ=0`.
+3. *(Optional; must be the **first** thing ever flashed)* Flash-dump program under 7 KB. Only `0x0–0x1FFF` gets erased; it dumps the rest of the bootloader plus the app over USB. Only worth it if signed Binepad UF2 updates must work again later.
+4. Decide on a bootloader. **Recommended: none at first.** The app sits at `0x0` and is flashed via ROM ISP with `wchisp`. A UF2 bootloader can come in phase 5.
+
+Done when: pins confirmed, backups in place (already true: UF2, stub image, EEPROM dump).
+
+### Phase 1: Build the base firmware for the EVB (DONE)
+EVB target builds in Docker (208,824 B flash). Board targets live in `qmk_porting/keyboards/<name>/` (`rules.cmake`, `qmk_config.h`, `info.json`, `vial.json`, `keymaps/`); the app is linked at `0x0`, no bootloader; QMK settings in data flash at `0x5000`, BLE bonds at `0x7000`; USB uses the high-speed controller.
+1. Clone [NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch585-qmk-vial) with submodules (its QMK fork + openwch/ch585 SDK).
+2. Build the stock EVB target with their Docker image (`nookcraftlab/riscv:latest`, `firmware/ch585_v2/build.sh`) → `build/ch585_evb.hex`. Docker on Apple Silicon may need `--platform linux/amd64`.
+3. Read through the project: how the board target is defined (`keyboard.json`/`config.h`/`rules.mk` vs. their own files), how USB HS vs FS is selected, the linker layout (start at `0x0`? data flash/EEPROM emulation for the QMK/Vial keymap storage), and how BLE mode is switched.
+
+Done when: the clean EVB build succeeds, and it is clear where a new board target goes.
+
+### Phase 2: BNK16 target, wired only (DONE; layer switch open)
+1. Create a `bnk16` keyboard in the port (copy of the EVB/`NCL-585` placeholder target):
+   - Matrix 5×4: rows `B3 B2 B0 B1 B21`, cols `B5 B4 B6 B7`, `COL2ROW` (measured, works).
+   - Encoders: left A/B = `B14`/`B15`, right A/B = `B17`/`B16`, big A/B = `B8`/`B9`, resolutions 4/4/1.
+   - WS2812 on `A10`, 17 LEDs, supply enable `A11` (high = on): needs the PWM+DMA driver, which had to be fixed (see "Port quirks"). **Works.**
+   - USB: **USBHS port** (the stock firmware uses HS). If HS is awkward, check whether the board's USB lines also reach the FS pins (PCB inspection).
+   - Haptics on PA7, not on PA11 (the stock haptic PWM pin), which is the LED supply enable.
+   - Own USB VID/PID: not `1A86:FE16/FC16`, so the OS and VIA don't confuse it with stock. Use a pid.codes or test PID for private use.
+2. Vial setup:
+   - `keymaps/vial/` with `vial.json` built from the stock layout (4×4 keys, encoder clicks at (4,0)/(4,1), e2 as the 3×3 knob; encoder rotation via Vial's encoder support).
+   - Generate a unique `VIAL_KEYBOARD_UID` (`python3 util/vial_generate_keyboard_uid.py` in vial-qmk, or 8 random bytes).
+   - Set `VIAL_UNLOCK_COMBO` to two keys (e.g. (0,0)+(0,3)).
+   - Enable `TAP_DANCE_ENABLE`, `COMBO_ENABLE`, `KEY_OVERRIDE_ENABLE`, dynamic macros (Vial defaults); check the limits (`DYNAMIC_KEYMAP_LAYER_COUNT` 4 to match the 4-position switch).
+3. Layer switch (if PB0/PB1 is confirmed): a small `matrix_scan_user`/`housekeeping_task` that reads the 2-bit value and calls `layer_move()`. Optional at first.
+4. Build → `.bin`/`.hex`.
+
+Done when: the BNK16 build compiles cleanly.
+
+### Phase 3: First flash and wired bring-up (DONE; small items postponed)
+Done and confirmed on the board: flashed, enumerates, Vial detects it, all 16 keys, all 3 encoders incl. both clicks, media keys and mouse wheel, modifier combos (`LSA(kc)`), RGB incl. reactive effects, settings persist after replug, Tap Dance, Combos, macros.
+`VIAL_INSECURE` removed in phase 43. Postponed by the owner ("later"): status LED position/colours (index 16 assumed last), 4-position layer switch (pins unknown; can be found with a probe build like the click probe).
+1. Enter ISP mode (PB22 while plugging in) and run `wchisp flash bnk16_vial.bin`. **From here on the stock bootloader is gone** (see section 7 for the way back).
+2. Check in order:
+   - Enumeration (`ioreg -p IOUSB -l`: new VID/PID, HS speed).
+   - Keys (16 + 2 clicks), encoder direction (swap A/B if reversed).
+   - Vial: <https://vial.rocks> or Vial desktop detects the board; remap, and settings persist after replug.
+   - Features: Tap Dance, Combos, Ctrl+S-style modifier keys, macros.
+   - RGB (done) and the layer switch (open).
+3. If debugging is needed: UART1 on PA9/PA8 (USB-serial adapter), or enable `CFG_DEBUG_EN` and use a WCH-LinkE.
+
+Done when: daily wired use works with all wanted Vial features. **This is the main goal.**
+
+### Phase 4: Bluetooth (works, edge cases open)
+
+Confirmed on the board with a Mac: pairing through layer 3, reconnect after a power cycle, reconnect timeout, slot 2 with a second host, slide switch in both directions with a cable in, pulling the cable in BT position, long macros, 12 min idle, media keys and mouse wheel (also after a power cycle without re-pairing).
+
+How it works now:
+- **Mode:** the slide switch PB11 alone decides (low = BT, high = USB, debounced 50 ms). BT position sends keys over BLE even with a cable in; Vial still works over USB. The `WIRED_MODE` key is gone.
+- **Keys:** `BT_1`-`BT_3` are the top row of layer 3. Tap = switch slot, hold 3 s = pair. `BT_CLEAR` is not on the default map because one tap erases all bonds.
+- **Storage:** bond table in its own flash page at `0x500` (outside the QMK and macro area), stack bonds (SNV) at `0x7000-0x7FFF`.
+- **Timing:** active interval 15 ms, latency 0, 3 packets per event. Macros about 50 characters per s.
+- **Idle:** after 5 min without a key the board "sleeps": LEDs and their supply off, link stays up. It never disconnects by itself. Interval 100-120 ms after 5 more min (phase 37; a 1000 ms step was removed, see phase 4b).
+- **Reconnect:** 30 s, then 3 red flashes and radio off until a key press. That first key press is not sent.
+
+**Do not use slave latency:** 30 dropped the link about 7 s after the last key. Suspected cause: the internal 32 kHz RC clock (no crystal) drifts too far during the skipped events. Not proven. The effect was not a reboot as far as the code shows (no watchdog or idle reset), although it looked like one.
+
+Open, not done:
+- **Bluetooth edge cases:** with a private host address, directed advertising may miss and general advertising takes over; during those 30 s any host can pair and overwrite the slot. All boards share the same addresses.
+- **Stock bonds:** stock kept bonds from `0x7800`, inside our SNV area, and this area may never have been erased. No problem seen so far; try an EEPROM erase if pairing misbehaves.
+
+### Phase 4b: Power (next step)
+
+Battery: 1550 mAh, 3.7 V. Current measured in the battery line, BT position, no cable, connected:
+
+| State | Phase 28 | Phase 29 |
+|---|---|---|
+| LEDs full brightness, white | 168 mA | 168 mA |
+| LEDs full brightness, animation | 80-100 mA | 80-100 mA |
+| LEDs off in Vial, status LED white | 33 mA | 30.5 mA |
+| LEDs off in Vial, status LED off, idle | 19.3-19.7 mA | 17.7 mA |
+| Sleep | 19.3 mA | 8.8 mA |
+
+PCB (photos 2026-11-02): `662K` SOT-89 next to the MCU is presumably the 3.3 V LDO. `2R2` inductor + SOT-23-6 + diode `S4` + `A5SHB` look like the LED supply (boost converter), not the MCU's DC-DC. Unmarked black part with caps below the MCU: function unknown, could be the DC-DC inductor if it reaches the MCU. In the stock disassembly the only write to `R16_POWER_PLAN` found is in its deep sleep routine, with no sign of DC-DC being enabled. So stock uses `LowPower_Sleep` on this hardware, and DC-DC is unlikely.
+
+**Problems with long intervals, seen once on phase 32 (waking from the 1000 ms step):**
+- One key press repeated about 25 times. Likely cause: press and release go out one interval apart, and the host auto-repeats meanwhile. A 1000 ms step needs a fix for this, or should be replaced by something else.
+- Text typed right after waking lost characters. Likely cause: `BLE_SEND_WAIT_MS` (500 ms) is shorter than the interval, so reports get overwritten. Macros would be affected too.
+- Phase 34 confirmed the link ran at 1020 ms, with the battery current unchanged at 8.8 mA. So the radio is not where the sleep current goes, and the 1000 ms step was removed in phase 35. The lowest step is now 100-120 ms (under the host's key repeat delay).
+
+**Where the sleep current goes (phases 35/36, minutes after the last key with a 1 min sleep timeout):**
+
+| State | Current |
+|---|---|
+| Awake, LEDs off | 17.8 mA |
+| Asleep, BLE 15 ms | 8.8 mA |
+| Asleep, BLE 100-120 ms | 8.4-8.5 mA |
+| + knob timer 250 Hz instead of 4 kHz | 7.3 mA |
+| + knob timer stopped (main loop stops too, no wake-up) | 6.9 mA |
+| Chip off (`battery_handle_critical()`), board floor | **92 uA** |
+
+So the hardware is fine (LDO, charger, LEDs with supply off together 92 uA), and about 7 mA is the CH585 itself: core at 62.4 MHz waking from WFI all the time, flash, PLL, maybe USBHS (on in BT position). Lessons: TMR2 is the only interrupt that wakes the main loop from WFI often enough, so stopping it freezes the keyboard. At 250 Hz the waking key gets lost (cause unknown). The diagnostics stay in the code: `BNK16_INTERVAL_DEBUG` (types the real interval) and `BNK16_POWER_DIAG` (staged test) in `qmk_config.h`.
+
+**Shutdown build (phase 39, 2026-11-03, built, not tested on the board).** Real deep sleep with the link kept failed (phase 38, below), and the stock firmware never does that either: connected it only idles with WFI, and its sleep is a shutdown with a reboot on the next key. Phase 39 does the same:
+
+| Time after the last key | Normal | Test build (`BNK16_POWER_TEST`) | State | Expected |
+|---|---|---|---|---|
+| until `POWER_SLEEP_TIMEOUT_MS` | 5 min | 30 s | awake | 17.8 mA, LEDs off |
+| then | 5 min | 30 s | light sleep: LEDs and supply off, BLE 15 ms, WFI | about 8.8 mA |
+| from `BLE_CONN_INTERVAL_L1_TIME` asleep | 10 min | 60 s | light sleep, BLE 100-120 ms | about 8.4 mA |
+| from `POWER_SHUTDOWN_TIMEOUT_MS` | 30 min | 90 s | **shutdown** | near the 92 uA floor (plus pull-ups on closed contacts) |
+
+- Shutdown (`bnk16_shutdown()` in `bnk16.c`, called from `power_task()`): only in BT position with no enumerated USB host. Ends the link (`ble_radio_off()`, 300 ms of TMOS so the host is told), disables interrupts, arms the same wake-up pins as deep sleep (`bnk16_deep_sleep_enter()`: keys, both clicks, left and big knob, PB11; not the small right knob), sets `R8_SLP_WAKE_CTRL = RB_WAKE_EV_MODE | RB_SLP_GPIO_WAKE`, then `LowPower_Shutdown(0)` (the SDK routine the stock firmware also uses: no RAM kept, software reset after the wake-up). A key already pressed or a pending pin edge reboots at once.
+- Wake-up = reboot: the normal boot reconnects to the current slot (blue flashing, then blue). The waking key is not sent, as with stock.
+- The sleep report (`BNK16_SLEEP_DIAG`) shows the reboot: after a wake-up from shutdown expect `k b6` (breadcrumb "about to shut down", if the keep register survives) and `b5` (reset flag "woken from shutdown") or `b0` (software reset).
+
+Test plan (30 s test build, BT position, battery, connected, text editor open):
+1. Current in each stage: awake, light sleep 15 ms (30-60 s), light sleep 100-120 ms (60-90 s), shutdown (from 90 s).
+2. After the shutdown, press a key: the board reboots and reconnects, a report line appears about 5 s after the reconnect. Send it.
+3. Wake by each source: a key, a knob click, turning the left knob, turning the big knob. Turning the small right knob is not expected to wake.
+4. Mac side: the board shows as disconnected right after the shutdown, and reconnects without re-pairing.
+5. Before daily use: switch off `BNK16_POWER_TEST` and `BNK16_SLEEP_DIAG` in `qmk_config.h`.
+
+**Battery (phase 42, done, commit `080ad84`).** Calibration 2026-11-03: bench supply on the battery connector, no cable, BT position, phase 40c probe, 4.2 V down to 3.0 V in 0.1 V steps. PA6 (SDK -12 dB conversion, mV): 2106, 2052, 2002, 1953, 1906, 1854, 1800, 1746, 1697, 1651, 1600, 1552, 1501. Fit: **Vbat = 1.9844 x PA6 + 25 mV**, every step within 10 mV. Chip supply (internal channel) stays at about 3.28 V down to 3.4 V, then follows the battery (3.23 V at 3.3, 2.94 V at 3.0 V: LDO dropout); PA6 stays linear because the ADC uses its internal reference. The board still ran at 3.0 V. Implemented in `battery.c` (bnk16) and `ble/battservice.c` (`battMeasure` calls `battery_get_level()`, notifies on any change; before it was a constant and only ever went down). Works on the board. While charging the level climbs to 100 % within minutes (80 to 100 % seen): the charger lifts the battery voltage, so the level is only real on battery; it settles after unplugging. **No charging state for the level, decided 2026-11-03: leave it.** No VBUS or charger status pin exists; options were a voltage-jump heuristic or a wire from the charger IC's status pin, neither wanted. Phase 43 only uses the voltage (>= 4.15 V) to skip the idle shutdown while charging. Old notes: PA6 = AIN10 is the battery through a 1:2 divider (phase 40c). Estimate from the uncalibrated ADC: 3.94 V, multimeter on the battery shortly after: 4.04 V, so about 2.5 % low (ADC reference and resistor tolerance, the charge state may also have moved between the two readings). For `battery.c` (still simulated): read AIN10 with `ADC_ExtSingleChSampInit(..., ADC_PGA_1_4)`, mV = `ADC_VoltConverSignalPGA_MINUS_12dB(raw)` x 2, then calibrate once against a multimeter (factor or offset), and map 3.3-4.2 V to percent for the BLE battery service. While charging the reading sits at about 4.2 V (charger CV), so the level is only meaningful on battery. The divider is always on and part of the shutdown current. The platform's pull-down on PA8 (the port's battery pin guess) can go.
+
+**Later option: the official BLE library.** The port's `sdk/BLE_LIB/libCH58xBLE.a` (1,396,786 B, git blob `968d772e…`) and `CH58xBLE_LIB.h` (blob `5ebacae3…`) are older than the official ones in openwch/ch585 `EVT/EXAM/BLE/LIB` (EVT v1.6, 2025-09-29: `libCH58xBLE.a` 1,389,300 B, blob `8126c818…`; there is also `libCH58xBLE_PERI.a`, peripheral only, smaller). The stock firmware uses `CH58x_BLE_LIB_V2.10`. Test idea: swap in the official library and header, rebuild, check that wired, BLE typing, pairing and reconnect still work, then retry real deep sleep (`BNK16_DEEP_SLEEP` + `HAL_SLEEP 1`, with and without `BNK16_SLEEP_HALT`) with the phase 38e diagnostic (breadcrumbs, first deep sleep without chip sleep). Other things to try then: sleep without `RB_PWR_RAM96K` (the stock app fits in 32 KB RAM, we use about 40 KB), and a plain RTC sleep test without BLE running, to see whether sleep works on this board at all. The header may differ in `bleConfig_t`/`bleClockConfig_t`, so check `MCU.c` and `RTC.c` against the official `HAL` again.
+
+**Deep sleep build (phase 38, 2026-11-03, failed on the board, code kept behind `BNK16_DEEP_SLEEP`, off).** How it works:
+- Entry: board asleep (5 min without a key), BT position, no enumerated USB host, no haptic burst running. Then TMR2 (knob) stops, the rows are driven low and the pins are armed: columns PB5/PB4/PB6/PB7 falling edge, encoder pins PB14/PB15/PB8/PB9 on the edge away from their current level, PB11 rising (move to USB). PB10 (layer switch) floats with no pull-up and does not wake. **PB16/PB17 (small right knob) cannot wake: on the CH585 only PB0-PB15 have pin interrupts**; its click does wake.
+- Sleep: `HAL_SLEEP 1` (`mcuconf.h`), so the BLE stack calls `CH58X_LowPower` (`sdk/HAL/SLEEP.c`) whenever TMOS is idle. A `hal_sleep_allowed()` veto (in `power_management.c`) lets it sleep only in deep sleep. `CH58X_LowPower` was replaced with the **official CH585 version from openwch/ch585** (`EVT/EXAM/BLE/HAL/SLEEP.c`): the port's copy was CH582 code with RAM flags the CH585 lacks, and the CH585 BLE library has no `WakeUpTime` field (removed from `MCU.c`). It wakes `WAKE_UP_RTC_MAX_TIME` (1600 us, official value) early by itself, sleeps with `LowPower_Sleep_WFE` with interrupts disabled (a pending pin interrupt ends the sleep at once), and after a pin wake waits 1.4 ms and restores the clock. `SLEEP.c` was not even in the build before (`sdk/CMakeLists.txt`).
+- While in deep sleep the main loop only runs TMOS, `power_task()` (interval step to 100-120 ms) and `ble_app_poll()` (BLE timeouts), once per radio event. No QMK task.
+- Wake-up: the GPIO interrupt sets a flag, the main loop restores QMK's pin states, restarts the 4 kHz knob timer and re-inits USBHS (the SDK says USBHS registers need a reset after a sleep with `RB_PWR_EXTEND`). The QMK scan then sees the key if it is still held, so the waking key should be typed; the big knob's waking step should count too. A wake-up without a key (knob jitter) goes back to deep sleep after 100 ms (`POWER_DEEP_SLEEP_RETRY_MS`).
+- Code: `bnk16.c` section "Deep sleep", `power_management.c` `power_deep_sleep_task()`/`hal_sleep_allowed()`, hook in `platform_run()` (`protocol_usb.c`, weak default for other boards).
+
+Test plan (BT position, battery, connected to the Mac; sleep starts 5 min after the last key):
+1. Awake behaviour unchanged: typing, knobs, Vial over USB in both positions, 17.8 mA awake with LEDs off.
+2. After 5 min: current in deep sleep (expect well under 1 mA; 92 uA is the board floor). A big knob resting on a closed contact adds its pull-up current, so try it at a few positions.
+3. Wake by a key: is that key typed? Wake by the left and big knob, both clicks, a key after > 10 min (100-120 ms interval). The small right knob is not expected to wake.
+4. Link stays up for an hour or more in deep sleep (RC 32 kHz clock).
+5. Cable in BT position with the Mac awake: no deep sleep, Vial works. Mac asleep, then wake the board and the Mac: USB comes back.
+6. Slide switch to USB with a cable while in deep sleep: wired mode follows.
+If it hangs or drops the link: flash phase 37 back via ISP.
+
+**Original plan for this step (kept for reference): real deep sleep.** Stock firmware uses `LowPower_Sleep` on this board. Expected: well under 1 mA asleep instead of 8.4 (estimate, about months instead of about 9 days on 1550 mAh). Plan, in testable stages:
+1. Key wake: while asleep, drive all matrix rows (B3, B2, B0, B1, B21) low and arm the column pins (B5, B4, B6, B7, B10) as falling-edge GPIO interrupts with `RB_SLP_GPIO_WAKE`; arm the encoder pins (B14/B15, B17/B16, B8/B9) on the edge opposite to their current level. Restore QMK's matrix pins on wake. `battery_critical_prerequisite()` in `platforms/ch58x/battery_measure.c` shows the wake register sequence.
+2. Sleep between radio events: `HAL_SLEEP` (`CH58X_LowPower` in `sdk/HAL/SLEEP.c` as TMOS `idleCB`, `HAL_SleepInit`) only while asleep, or call `LowPower_Sleep` from `platform_run()` when no TMOS event is due. TMR2 and the QMK polling must stop while asleep; check the RC 32 kHz timing for link drops.
+3. Wake-up: GPIO interrupt → back to the normal loop, 4 kHz knob timer, `power_wake_up()`. Probably the waking key is not typed (common on wireless keyboards); decide whether that is acceptable.
+4. Measure again, then check whether USBHS draws current in BT position and can be switched off.
+
+Current state, from reading the code:
+- `__WFI()` in `main` (`bnk16.c`) is never reached, because `platform_run()` in `protocol.c` loops forever. Since phase 29 the WFI is in `platform_run()` in `protocol_usb.c`, BT position only.
+- DC-DC and `HAL_SLEEP` are off. `DCDC_ENABLE 1` in `mcuconf.h` has no effect: no code in the port or SDK sets `RB_PWR_DCDC_EN`. DC-DC needs an inductor on the PCB, so check for one before enabling it. Set these individually, not through `BLE_ENABLE`, and keep `LSE_ENABLE` at 0.
+- The big knob interrupt (TMR2) runs at 4 kHz all the time, so WFI lasts at most 250 us. It also is what keeps the main loop running. Needs pin-change wake for anything deeper.
+- USB stays on in BT position. There is no known VBUS pin, so the firmware cannot tell whether a cable is in; USB state is read from the USBHS driver, where a pulled cable and a sleeping host look alike.
+- `power_task` only tracks a state flag. A real standby needs a decision on timing and wake sources (matrix keys, encoders). The matrix has to be armed for GPIO wake, and PB11 should wake it too. Decide whether to keep the link or disconnect.
+- Timing depends on the RC clock, so test every sleep level for link drops on the board.
+
+Battery work belongs next to this. `battery.c` returns a simulated value. To measure on the board:
+- Battery ADC pin and divider. The stock code suggests AIN12, which the port maps to PA8. PA8 must be floating, but `platform.c` sets a pull-down on it.
+- VBUS detect and charger status. PA6 read high in the switch probe, so check it first. PB14/PB16/PB17 from the stock code are encoder pins.
+- Whether it charges in the USB switch position (the switch cuts battery +), battery capacity, and current in each state.
+
+### Phase 5: Comfort extras (optional)
+1. UF2 bootloader: port O-H-M2's MCUboot+UF2 to CH585 using the stock layout (`0x18000`, header `0x1000`), validating SHA256 only and no signature. The app is then linked at `0x19000` and signed with `imgtool` without a key. In theory it could also boot the stock signed UF2. Untested.
+2. Use QMK's `QK_BOOT` for the jump to the bootloader, so updates no longer need PB22.
+3. Contribute the `bnk16` target upstream to NookCraftLab.
+
+### Risks
+- ch585-qmk-vial is young; expect to fix things in the port itself (USBHS, WS2812, flash storage).
+- ~~The RGB driver might be missing on CH585~~ Resolved: the port's PWM driver needed fixes, now works.
+- Only matrix, encoder, PA10 and PA11 pins are confirmed. Every other pin from the stock-code reading (switch, VBUS, battery, layer switch) is unverified and partly proven wrong; measure before wiring them in. The pin-scan trick (below) is a cheap way to find output pins.
+- The stock bootloader is gone; the way back is the untested stub image (section 7). ISP via PB22 always works.
+- The closed WCH BLE library limits debugging of wireless problems.
+- Fallback if the port fails completely: a minimal own firmware on the WCH SDK HID example (fixed keymap), or the stub restore.
+
+## 7. Going back to stock
+**Tested 2026-11-03 and it does not work on this board.** Flashing `BNK16-stock-restore-stub.bin` (with and without restoring `bnk16-eeprom.bin`) leaves the board dead. The stub itself is sound (see "Stub restore analysis"); the downloaded 1.7.141 release is for a different PCB revision than this board (section 4), so the stock app cannot run here. The matching factory build is read-protected and gone. So:
+- There is no working route back to stock with the files we have. Our Vial firmware is the firmware for this board; reflash it with `wchisp flash <build>.bin` any time (it rebuilds its own data flash).
+- The only real source of a working stock image would be Binepad support, for the exact hardware revision (probably revision 1).
+- The steps that were expected to work, kept for reference only: enter ISP mode (PB22 while plugging in), `wchisp flash BNK16-stock-restore-stub.bin`, then restore or erase the EEPROM. They boot nothing.

@@ -66,7 +66,7 @@ wchisp flash firmware/ch585_v2/build-bnk16/bnk16.bin
 
 The bootloader is in mask ROM, so a bad flash cannot brick the board: this procedure always works. Do not run `wchisp config` without a reason, it can trigger a full erase.
 
-Flashing removes Binepad's stock UF2 bootloader, so signed Binepad updates no longer work. A way back to stock exists but is untested, see [docs/bnk16/HARDWARE.md](docs/bnk16/HARDWARE.md#going-back-to-stock).
+Flashing removes Binepad's stock UF2 bootloader, so signed Binepad updates no longer work. **Going back to the stock firmware is probably not possible** — at least on the board this was developed on (likely the first PCB revision). The restore stub was tested on 2026-11-03 and the board stays dead, because the only stock firmware available for download (release 1.7.141) is built for a different hardware revision and does not run on this board, and the matching factory build is locked in the read-protected stock bootloader. A working image would have to come from Binepad. Details in [docs/bnk16/HARDWARE.md](docs/bnk16/HARDWARE.md#going-back-to-stock) and [docs/bnk16/PROJECT_NOTES.md](docs/bnk16/PROJECT_NOTES.md). The board itself is never at risk: our Vial firmware always reflashes via `wchisp`.
 
 ## Use
 
