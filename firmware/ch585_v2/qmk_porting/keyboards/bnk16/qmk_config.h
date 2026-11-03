@@ -102,8 +102,8 @@
 
 /* Vial */
 #define VIAL_KEYBOARD_UID {0xDE, 0x8B, 0x27, 0x0F, 0x95, 0xED, 0x79, 0xBB}
-/* Always unlocked for now; removing this activates the unlock combo below */
-#define VIAL_INSECURE
+/* Secure mode: Vial asks to hold the unlock combo (top-left + top-right key) before the matrix tester,
+ * macro edits or assigning QK_BOOT; other keymap edits work while locked */
 #define VIAL_UNLOCK_COMBO_ROWS {0, 0}
 #define VIAL_UNLOCK_COMBO_COLS {0, 3}
 #define DYNAMIC_KEYMAP_LAYER_COUNT 4

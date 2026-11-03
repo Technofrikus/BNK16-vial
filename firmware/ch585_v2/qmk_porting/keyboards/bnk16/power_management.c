@@ -101,7 +101,10 @@ void power_task(void)
         if (target_level != ble_get_current_interval_level()) {
             ble_request_conn_interval(target_level);
         }
-        if (now - last_activity_time >= POWER_SHUTDOWN_TIMEOUT_MS && bnk16_deep_sleep_possible()) {
+        /* no idle shutdown while the battery charges, the cable is in; once it is full (or the cable is
+         * pulled) the voltage drops below the charging level and the shutdown follows */
+        if (now - last_activity_time >= POWER_SHUTDOWN_TIMEOUT_MS && !battery_is_charging() &&
+            bnk16_deep_sleep_possible()) {
             bnk16_shutdown();
         }
         return;

@@ -8,7 +8,7 @@
  * where the LDO drops out and the chip supply falls with the battery.
  *
  * There is no charger status or VBUS pin: while charging PA6 sits at the charger's 4.2 V, so the level
- * shows 100 % and only means something on battery.
+ * shows 100 % and only means something on battery, and that 4.2 V is the only sign of a cable.
  */
 
 #include "battery.h"
@@ -119,7 +119,8 @@ bool battery_is_critical(void)
 
 bool battery_is_charging(void)
 {
-    return false; /* no charger status pin */
+    battery_update();
+    return battery_mv >= BATTERY_CHARGING_VOLTAGE_MV; /* no charger status pin, see battery.h */
 }
 
 bool battery_is_battery_powered(void)
