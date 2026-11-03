@@ -76,6 +76,8 @@ typedef struct {
     uint16_t interval;
     uint16_t latency;
     uint16_t timeout;
+    uint16_t terminations;  /* links ended, and the reason of the last one (HCI error code) */
+    uint8_t term_reason;
 } ble_conn_debug_t;
 extern ble_conn_debug_t ble_conn_debug;
 

@@ -12,9 +12,10 @@
 #include "timer.h"
 #include "led_indicator.h"
 #include "CH58x_common.h"
+#include "bnk16.h"
+#include "bnk16_diag.h"
 #ifdef BNK16_POWER_DIAG
 #include "battery_measure.h"
-#include "bnk16.h"
 #endif
 
 /* ========================================================================
@@ -27,6 +28,10 @@ static bool low_battery_active = false;
 static bool s_wired_mode = false;
 static bool s_mobile_mode = false;  /* 携带模式：禁用阶梯式连接间隔，固定2000ms */
 static uint32_t sleep_start_time = 0;
+static bool s_deep_sleep = false;
+static uint32_t deep_sleep_exit_time = 0;
+uint16_t power_deep_sleep_entries = 0;
+uint16_t power_deep_sleep_exits = 0;
 #ifdef BNK16_POWER_DIAG
 static bool s_knob_slow = false;
 #endif
@@ -89,6 +94,9 @@ void power_task(void)
 
         if (target_level != ble_get_current_interval_level()) {
             ble_request_conn_interval(target_level);
+        }
+        if (now - last_activity_time >= POWER_SHUTDOWN_TIMEOUT_MS && bnk16_deep_sleep_possible()) {
+            bnk16_shutdown();
         }
         return;
     }
@@ -156,6 +164,53 @@ void power_wake_up(void)
 #endif
 
     /* LED0 连接状态灯由 led_indicator 管理 */
+}
+
+/* ========================================================================
+ * Deep sleep
+ * ======================================================================== */
+
+/* Read by CH58X_LowPower() (sdk/HAL/SLEEP.c) each time the BLE stack is idle */
+__HIGH_CODE bool hal_sleep_allowed(void)
+{
+#ifdef BNK16_SLEEP_DIAG
+    /* the first deep sleep runs without the chip sleeping, to tell the two parts apart */
+    if (power_deep_sleep_entries < 2) {
+        return false;
+    }
+#endif
+    return s_deep_sleep && !bnk16_deep_sleep_woken();
+}
+
+bool power_deep_sleep_task(void)
+{
+#ifndef BNK16_DEEP_SLEEP
+    return false;
+#endif
+    if (s_deep_sleep) {
+        if (!bnk16_deep_sleep_woken()) {
+            /* interval step and the BLE timeouts still run, once per radio event */
+            power_task();
+            ble_app_poll();
+            return true;
+        }
+        s_deep_sleep = false;
+        power_deep_sleep_exits++;
+        deep_sleep_exit_time = timer_read32();
+        bnk16_deep_sleep_exit();
+        DIAG_CRUMB(DIAG_CRUMB_DEEP_EXIT);
+        return false;
+    }
+
+    if (current_power_state == POWER_STATE_SLEEPING && !s_wired_mode &&
+        timer_read32() - deep_sleep_exit_time >= POWER_DEEP_SLEEP_RETRY_MS && bnk16_deep_sleep_possible()) {
+        bnk16_deep_sleep_enter();
+        s_deep_sleep = true;
+        power_deep_sleep_entries++;
+        DIAG_CRUMB(DIAG_CRUMB_DEEP_ENTER);
+        return true;
+    }
+    return false;
 }
 
 /* ========================================================================

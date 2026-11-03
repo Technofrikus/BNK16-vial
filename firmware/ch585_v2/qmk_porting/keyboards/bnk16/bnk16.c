@@ -615,6 +615,23 @@ static inline __attribute__((always_inline)) uint8_t bnk16_big_read_raw(void) {
     return (gpio_read_pin(bnk16_enc_pins[0][BNK16_BIG_ENCODER]) ? 1 : 0) | (gpio_read_pin(bnk16_enc_pins[1][BNK16_BIG_ENCODER]) ? 2 : 0);
 }
 
+/* Samples the knob at 4 kHz in an interrupt, see TMR2_IRQHandler */
+static void knob_timer_start(void) {
+    TMR2_TimerInit(FREQ_SYS / 4000);
+    TMR2_ClearITFlag(RB_TMR_IF_CYC_END);
+    TMR2_ITCfg(ENABLE, RB_TMR_IE_CYC_END);
+    PFIC_EnableIRQ(TMR2_IRQn);
+}
+
+/* In deep sleep a pin interrupt watches the knob instead. bnk16_big_raw keeps the last state, so the
+ * first sample after the restart counts the step that woke the board. */
+static void knob_timer_stop(void) {
+    PFIC_DisableIRQ(TMR2_IRQn);
+    TMR2_ITCfg(DISABLE, RB_TMR_IE_CYC_END);
+    R8_TMR2_CTRL_MOD = RB_TMR_ALL_CLEAR;
+    TMR2_ClearITFlag(RB_TMR_IF_CYC_END);
+}
+
 void encoder_quadrature_init_pin(uint8_t index, bool pad_b) {
     gpio_set_pin_input_high(bnk16_enc_pins[pad_b][index]);
     if (index == BNK16_BIG_ENCODER && pad_b) {
@@ -625,11 +642,7 @@ void encoder_quadrature_init_pin(uint8_t index, bool pad_b) {
                 bnk16_big_pos = bnk16_big_filtered = i;
             }
         }
-        /* sample the knob at 4 kHz in an interrupt, see TMR2_IRQHandler */
-        TMR2_TimerInit(FREQ_SYS / 4000);
-        TMR2_ClearITFlag(RB_TMR_IF_CYC_END);
-        TMR2_ITCfg(ENABLE, RB_TMR_IE_CYC_END);
-        PFIC_EnableIRQ(TMR2_IRQn);
+        knob_timer_start();
     }
 }
 
@@ -711,12 +724,152 @@ void matrix_scan_kb(void) {
 }
 #endif
 
+/* ========================================================================
+ * Deep sleep (power_management.c decides when): the core stops between radio events, and pin
+ * interrupts wake it. Rows are driven low, so any key pulls its column low (COL2ROW diodes).
+ * Only PB0-PB15 can interrupt on the CH585: the small right knob (PB16/PB17) does not wake the board,
+ * its click does (row PB21 x column PB4). PB10 (layer switch) floats instead of waking: in positions
+ * 1-3 it sits low through a diode, and the pull-up would draw current all the time. The matrix reads
+ * the switch again after the next wake-up. PB11 wakes on the move to the USB position.
+ * ======================================================================== */
+static const pin_t   sleep_row_pins[] = MATRIX_ROW_PINS;
+static const pin_t   sleep_col_pins[] = { B5, B4, B6, B7 };
+static const pin_t   sleep_enc_pins[] = { B14, B15, B8, B9 };
+static volatile bool sleep_woken;
+static uint16_t      sleep_wake_mask; /* the armed pins in R16_PB_INT_IF */
+
+/* pin_t is the GPIO_Pin_x mask with bit 31 set for port B */
+static inline uint32_t port_b_bit(pin_t pin) {
+    return pin & 0x7FFFFFFF;
+}
+
+__INTERRUPT __HIGH_CODE void GPIOB_IRQHandler(void) {
+    R16_PB_INT_EN = 0; /* one wake-up is enough, the pins go back to QMK */
+    R16_PB_INT_IF = 0xFFFF;
+    sleep_woken   = true;
+}
+
+/* USB in use or a haptic burst still running: stay awake */
+bool bnk16_deep_sleep_possible(void) {
+    return !usb_is_connected() && !haptic_running;
+}
+
+void bnk16_deep_sleep_enter(void) {
+#ifdef ENCODER_ENABLE
+    knob_timer_stop();
+#endif
+    PFIC_DisableIRQ(GPIO_B_IRQn);
+    R16_PB_INT_EN = 0;
+    sleep_woken   = false;
+
+    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_row_pins); i++) {
+        gpio_write_pin_low(sleep_row_pins[i]);
+        gpio_set_pin_output(sleep_row_pins[i]);
+    }
+    gpio_set_pin_input(B10);
+    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_col_pins); i++) {
+        GPIOB_ITModeCfg(port_b_bit(sleep_col_pins[i]), GPIO_ITMode_FallEdge);
+    }
+    /* encoder contacts rest open or closed: wake on the edge away from the current level */
+    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_enc_pins); i++) {
+        pin_t pin = sleep_enc_pins[i];
+        GPIOB_ITModeCfg(port_b_bit(pin), gpio_read_pin(pin) ? GPIO_ITMode_FallEdge : GPIO_ITMode_RiseEdge);
+    }
+    GPIOB_ITModeCfg(GPIO_Pin_11, GPIO_ITMode_RiseEdge);
+    sleep_wake_mask = R16_PB_INT_EN;
+
+    sys_safe_access_enable();
+    R8_SLP_WAKE_CTRL |= RB_SLP_GPIO_WAKE;
+    sys_safe_access_disable();
+    PFIC_EnableIRQ(GPIO_B_IRQn);
+
+    /* a key pressed while the pins were armed has no edge left: wake at once */
+    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_col_pins); i++) {
+        if (!gpio_read_pin(sleep_col_pins[i])) {
+            sleep_woken = true;
+        }
+    }
+}
+
+bool bnk16_deep_sleep_woken(void) {
+    return sleep_woken;
+}
+
+/* Back to the pin states QMK expects between scans (rows unselected) */
+void bnk16_deep_sleep_exit(void) {
+    extern void USBHS_Device_Init(FunctionalState sta);
+
+    PFIC_DisableIRQ(GPIO_B_IRQn);
+    R16_PB_INT_EN = 0;
+    R16_PB_INT_IF = 0xFFFF;
+    sys_safe_access_enable();
+    R8_SLP_WAKE_CTRL &= ~RB_SLP_GPIO_WAKE;
+    sys_safe_access_disable();
+
+    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_row_pins); i++) {
+        gpio_set_pin_input_high(sleep_row_pins[i]);
+    }
+    gpio_set_pin_input_high(B10);
+#ifdef ENCODER_ENABLE
+    knob_timer_start();
+#endif
+    /* the SDK: after a sleep with the USB/BLE power domain kept (RB_PWR_EXTEND), reset the USBHS registers */
+    USBHS_Device_Init(ENABLE);
+}
+
+/* Shutdown, the way the stock firmware sleeps: end the link, arm the wake-up pins as for deep sleep, then
+ * switch the chip off (LowPower_Shutdown, no RAM kept). A wake-up pin restarts it from reset, and the
+ * normal boot reconnects. USB is not kept, so the caller checks bnk16_deep_sleep_possible() first. */
+#define SHUTDOWN_DISCONNECT_MS 300 /* lets the stack tell the host the link ends */
+
+__attribute__((noreturn)) void bnk16_shutdown(void) {
+    ble_radio_off();
+    uint32_t start = timer_read32();
+    while (timer_elapsed32(start) < SHUTDOWN_DISCONNECT_MS) {
+        TMOS_SystemProcess();
+    }
+
+    /* interrupts off for good: the pin handler would disable the wake-up pins on the first edge, while a
+     * pending flag keeps them working */
+    unsigned long irq_status;
+    SYS_DisableAllIrq(&irq_status);
+    bnk16_deep_sleep_enter();
+    /* Shut down, the chip draws microamps, while a pull-up against a closed contact draws tens of them
+     * (phase 39b: 200 uA). PB11 sits at GND in the BT position, so it floats and does not wake (moving the
+     * switch to USB with a cable in then needs a key). An encoder pin on a closed contact gets a pull-down
+     * and does not wake either: the knob wakes once a contact that rests open closes. */
+    R16_PB_INT_EN &= ~GPIO_Pin_11;
+    gpio_set_pin_input(B11);
+    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_enc_pins); i++) {
+        pin_t pin = sleep_enc_pins[i];
+        if (!gpio_read_pin(pin)) {
+            R16_PB_INT_EN &= ~port_b_bit(pin);
+            gpio_set_pin_input_low(pin);
+        }
+    }
+    sleep_wake_mask = R16_PB_INT_EN;
+    /* a key pressed by now has no edge left to wake the chip. Only the armed pins count: the flags of the
+     * other port B pins latch too (phase 39: PB10 of the layer switch rebooted every shutdown attempt). */
+    if (bnk16_deep_sleep_woken() || (R16_PB_INT_IF & sleep_wake_mask)) {
+        DIAG_CRUMB(DIAG_CRUMB_SHUTDOWN_ABORT);
+        SYS_ResetExecute();
+    }
+    sys_safe_access_enable();
+    R8_SLP_WAKE_CTRL = RB_WAKE_EV_MODE | RB_SLP_GPIO_WAKE;
+    sys_safe_access_disable();
+    DIAG_CRUMB(DIAG_CRUMB_SHUTDOWN);
+    LowPower_Shutdown(0);
+    SYS_ResetExecute(); /* not reached: LowPower_Shutdown() resets after the wake-up */
+    __builtin_unreachable();
+}
+
 int main(void) {
     extern void protocol_setup();
     extern void protocol_pre_init();
     extern void protocol_post_init();
     extern void platform_run();
 
+    bnk16_diag_boot();
     platform_setup();
 
     bnk16_pins_prepare();

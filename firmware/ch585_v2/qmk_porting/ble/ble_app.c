@@ -531,6 +531,10 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
              * 6. CONNECTED: the link dropped: reconnect to the current slot
              * SWITCHING with nothing pending, IDLE, STANDBY: nothing to do
              */
+            if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
+                ble_conn_debug.terminations++;
+                ble_conn_debug.term_reason = pEvent->linkTerminate.reason;
+            }
             conn_handle = GAP_CONNHANDLE_INIT;
             conn_peer_valid = false;
             adv_active = false;

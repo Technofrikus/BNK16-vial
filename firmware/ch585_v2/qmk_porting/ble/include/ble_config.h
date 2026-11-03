@@ -57,7 +57,9 @@
 #define BLE_CONN_INTERVAL_L1_MAX    96
 
 /* Time asleep before the level is used, ms (10 min after the last key with the 5 min sleep timeout) */
+#ifndef BLE_CONN_INTERVAL_L1_TIME
 #define BLE_CONN_INTERVAL_L1_TIME   (5 * 60 * 1000)
+#endif
 
 /* 兼容旧代码：日常模式用档位0（15ms）*/
 #define BLE_MIN_CONN_INTERVAL       BLE_CONN_INTERVAL_L0_MIN

@@ -47,3 +47,10 @@ void bnk16_status_mobile_mode(bool on);
 void bnk16_knob_timer(bool fast);
 #endif
 uint8_t bnk16_keycode_bt_device(uint16_t keycode);
+
+/* Deep sleep pins, used by power_management.c */
+bool bnk16_deep_sleep_possible(void);
+void bnk16_deep_sleep_enter(void);
+bool bnk16_deep_sleep_woken(void);
+void bnk16_deep_sleep_exit(void);
+__attribute__((noreturn)) void bnk16_shutdown(void);

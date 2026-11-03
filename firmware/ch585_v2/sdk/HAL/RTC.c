@@ -69,8 +69,29 @@ void RTC_IRQHandler(void)
  *
  * @return  None.
  */
+/* Clock callbacks for the BLE library, as in the official CH585 EVT (EVT/EXAM/BLE/HAL/RTC.c) */
+__HIGH_CODE
+static uint32_t SYS_GetClockValue(void)
+{
+    volatile uint32_t i;
+
+    do
+    {
+        i = R32_RTC_CNT_32K;
+    } while(i != R32_RTC_CNT_32K);
+
+    return (i);
+}
+
+__HIGH_CODE
+static void SYS_SetPendingIRQ(void)
+{
+    PFIC_SetPendingIRQ(RTC_IRQn);
+}
+
 void HAL_TimeInit(void)
 {
+    bleClockConfig_t conf;
 #if(CLK_OSC32K)
     sys_safe_access_enable();
     R8_CK32K_CONFIG &= ~(RB_CLK_OSC32K_XT | RB_CLK_XT32K_PON);
@@ -86,7 +107,16 @@ void HAL_TimeInit(void)
     sys_safe_access_disable();
 #endif
     RTC_InitTime(2020, 1, 1, 0, 0, 0); //RTC时钟初始化当前时间
-    TMOS_TimerInit(0);
+    /* The CH585 library takes the sleep clock description here (the CH582 one took nothing). Without it the
+     * library does not know the internal RC is only good to about 1000 ppm, and after a sleep it listens too
+     * briefly for the host and the link drops. */
+    tmos_memset(&conf, 0, sizeof(bleClockConfig_t));
+    conf.ClockAccuracy = CLK_OSC32K ? 1000 : 50;
+    conf.ClockFrequency = CAB_LSIFQ;
+    conf.ClockMaxCount = RTC_MAX_COUNT;
+    conf.getClockValue = SYS_GetClockValue;
+    conf.SetPendingIRQ = SYS_SetPendingIRQ;
+    TMOS_TimerInit(&conf);
 }
 
 /******************************** endfile @ time ******************************/

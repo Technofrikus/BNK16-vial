@@ -167,6 +167,12 @@ static void protocol_post_task()
 {
 }
 
+/* Boards without deep sleep */
+__attribute__((weak)) bool power_deep_sleep_task(void)
+{
+    return false;
+}
+
 __HIGH_CODE static void platform_run()
 {
     /* LED指示灯任务 — 处理闪烁和状态超时
@@ -176,6 +182,11 @@ __HIGH_CODE static void platform_run()
 
     /* 处理 BLE 协议栈任务（TMOS 调度器） */
     TMOS_SystemProcess();
+
+    /* deep sleep: the core sleeps inside TMOS until the next radio event or a wake-up pin, no QMK task */
+    if (!wired_mode_active && power_deep_sleep_task()) {
+        return;
+    }
 
     /* BT mode runs on battery: scan less often and let the core wait for the next interrupt in between.
      * The big knob timer wakes it every 250 us at the latest, so TMOS still runs on time. */

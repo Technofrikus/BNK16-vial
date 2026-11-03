@@ -1,7 +1,7 @@
 /*
  * power_management.h — 电源管理
  * Sleep after POWER_SLEEP_TIMEOUT_MS without a key (LEDs and their supply off, link stays up), any key
- * wakes; no sleep in wired mode. WFI between QMK tasks. BLE interval 15 ms, 100-120 ms after a while
+ * wakes; shutdown after POWER_SHUTDOWN_TIMEOUT_MS; no sleep in wired mode. WFI between QMK tasks. BLE interval 15 ms, 100-120 ms after a while
  * asleep (ble_config.h). Low battery: LED1 blinks slowly.
  */
 
@@ -16,7 +16,19 @@
  * ======================================================================== */
 
 /* Idle time before the board sleeps (LEDs off, link stays up) */
+#ifndef POWER_SLEEP_TIMEOUT_MS
 #define POWER_SLEEP_TIMEOUT_MS     (5 * 60 * 1000)
+#endif
+
+/* Time after the last key until the board shuts down, the way the stock firmware sleeps: the link ends,
+ * the chip is off except for the wake-up pins, and a key or knob reboots it (that key is not sent) */
+#ifndef POWER_SHUTDOWN_TIMEOUT_MS
+#define POWER_SHUTDOWN_TIMEOUT_MS  (30 * 60 * 1000)
+#endif
+
+/* After a deep sleep wake-up without a key (knob jitter, layer switch), the matrix gets this long to
+ * see something before the core sleeps again; longer than the debounce */
+#define POWER_DEEP_SLEEP_RETRY_MS  100
 
 /* 低电量阈值（百分比）— 低于这个值 LED1 慢闪提醒 */
 #define POWER_LOW_BATTERY_THRESHOLD  10  /* 10% */
@@ -59,6 +71,15 @@ void power_wake_up(void);
 
 /* 获取当前电源状态 */
 power_state_t power_get_state(void);
+
+/* Deep sleep, BT mode only, called from the main loop every pass. While asleep with no USB host it
+ * hands the pins to the wake-up interrupts and lets the BLE stack stop the core between radio events.
+ * Returns true while in deep sleep: the caller then skips the QMK task. */
+bool power_deep_sleep_task(void);
+
+/* Deep sleep entries and exits since boot, for BNK16_SLEEP_DIAG */
+extern uint16_t power_deep_sleep_entries;
+extern uint16_t power_deep_sleep_exits;
 
 /* 获取距离睡眠还有多少时间（毫秒）— 用于调试 */
 uint32_t power_get_time_until_sleep(void);

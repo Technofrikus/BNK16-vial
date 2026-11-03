@@ -40,6 +40,17 @@ extern void HAL_SleepInit(void);
  */
 extern uint32_t CH58X_LowPower(uint32_t time);
 
+/* Counters of how CH58X_LowPower() ended */
+enum {
+    HAL_SLEEP_STAT_VETO,  /* not allowed by the application */
+    HAL_SLEEP_STAT_SHORT, /* sleep time out of range */
+    HAL_SLEEP_STAT_RTC,   /* slept, woken by the RTC as planned */
+    HAL_SLEEP_STAT_PIN,   /* slept, woken by something else (a pin) */
+    HAL_SLEEP_STAT_LATE,  /* the wake-up time had passed before the sleep */
+    HAL_SLEEP_STAT_NUM
+};
+extern volatile uint32_t hal_sleep_stats[HAL_SLEEP_STAT_NUM];
+
 /*********************************************************************
 *********************************************************************/
 

@@ -5,7 +5,7 @@
  */
 #include "bnk16_diag.h"
 
-#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG)
+#if defined(BNK16_PIN_SCAN) || defined(BNK16_SWITCH_PROBE) || defined(BNK16_INTERVAL_DEBUG) || defined(BNK16_SLEEP_DIAG) || defined(BNK16_VBUS_PROBE)
 #include QMK_KEYBOARD_H
 #include "CH58x_common.h"
 #include "ble_app.h"
@@ -336,7 +336,121 @@ static void interval_report_task(void) {
 }
 #endif
 
+#ifdef BNK16_SLEEP_DIAG
+/* ========================================================================
+ * Sleep report: one line typed over BLE 5 s after every connection and 2 s after every wake-up from
+ * deep sleep, counters since boot:
+ * k breadcrumb found at boot (DIAG_CRUMB_x in bnk16_diag.h; 00 = power was really lost),
+ * b reset cause of this boot (R8_RESET_STATUS: 1 power on, 0 software, 2 watchdog, 3 reset pin,
+ *   5 wake-up from a sleep that lost the RAM), e/x deep sleep entries/exits,
+ * CH58X_LowPower results: v vetoed, s time out of range, r slept and woken by the RTC,
+ *   p slept and woken by a pin, l wake-up time already passed,
+ * t links ended, d reason of the last one (hex HCI code: 08 supervision timeout, 13 host ended it,
+ *   22/28 link layer timeout / instant passed, 3e failed to establish).
+ * If the board is in deep sleep when it reconnects, the line comes after the next key.
+ * ======================================================================== */
+#include "SLEEP.h"
+
+static uint8_t crumb_at_boot;
+
+/* Runs first thing in main(): keep the breadcrumb the last run left behind */
+void bnk16_diag_boot(void) {
+    crumb_at_boot = R8_GLOB_RESET_KEEP;
+    DIAG_CRUMB(DIAG_CRUMB_BOOT);
+}
+
+static void sleep_report_task(void) {
+    static uint32_t connected_time;
+    static bool     reported;
+    static uint16_t last_exits;
+    static uint32_t exit_time;
+    char            line[112];
+
+    if (power_deep_sleep_exits != last_exits) {
+        last_exits = power_deep_sleep_exits;
+        exit_time  = timer_read32();
+        reported   = false;
+    }
+    if (!ble_is_connected()) {
+        connected_time = timer_read32();
+        reported       = false;
+        return;
+    }
+    if (reported || timer_elapsed32(connected_time) < 5000 || (last_exits != 0 && timer_elapsed32(exit_time) < 2000)) {
+        return;
+    }
+    reported = true;
+    snprintf(line, sizeof(line), " k%02x b%u e%u x%u v%lu s%lu r%lu p%lu l%lu t%u d%02x\n", crumb_at_boot, R8_RESET_STATUS & RB_RESET_FLAG, power_deep_sleep_entries, power_deep_sleep_exits, hal_sleep_stats[HAL_SLEEP_STAT_VETO], hal_sleep_stats[HAL_SLEEP_STAT_SHORT], hal_sleep_stats[HAL_SLEEP_STAT_RTC], hal_sleep_stats[HAL_SLEEP_STAT_PIN], hal_sleep_stats[HAL_SLEEP_STAT_LATE], ble_conn_debug.terminations, ble_conn_debug.term_reason);
+    send_string(line);
+    clear_keyboard();
+}
+#endif
+
+#ifdef BNK16_VBUS_PROBE
+/* ========================================================================
+ * Cable sense probe (the switch probe showed PA6 tied high on battery, and all pull-ups higher with a cable).
+ * Every 50 ms: PA6 level without pull, PA6 voltage and the chip supply (internal VBAT channel), in mV.
+ * Every 3 s one line with the range of those 3 s: " a6 <level flips> <min>-<max> vdd <min>-<max>".
+ * Phase 40b showed PA6 at about half the supply, so it is a divider, and with a cable the values never
+ * settled. Starts 5 s after boot.
+ * ======================================================================== */
+#define VBUS_PROBE_AIN_A6 10
+
+static int vbus_probe_mv(void) {
+    uint32_t sum = 0;
+    ADC_ExcutSingleConver();
+    for (uint8_t n = 0; n < 8; n++) {
+        sum += ADC_ExcutSingleConver();
+    }
+    return ADC_VoltConverSignalPGA_MINUS_12dB(sum / 8);
+}
+
+static void vbus_probe_task(void) {
+    static uint32_t last_sample, window_start;
+    static int      last_level = -1, flips, a6_min = 99999, a6_max, vdd_min = 99999, vdd_max;
+    char            line[64];
+
+    if (timer_read32() < 5000 || timer_elapsed32(last_sample) < 50) {
+        return;
+    }
+    last_sample = timer_read32();
+
+    gpio_set_pin_input(A6);
+    int level = gpio_read_pin(A6) ? 1 : 0;
+    ADC_ExtSingleChSampInit(SampleFreq_4_or_2, ADC_PGA_1_4);
+    ADC_ChannelCfg(VBUS_PROBE_AIN_A6);
+    int a6 = vbus_probe_mv();
+    ADC_InterBATSampInit();
+    int vdd = vbus_probe_mv();
+
+    if (last_level >= 0 && level != last_level) {
+        flips++;
+    }
+    last_level = level;
+    a6_min     = MIN(a6_min, a6);
+    a6_max     = MAX(a6_max, a6);
+    vdd_min    = MIN(vdd_min, vdd);
+    vdd_max    = MAX(vdd_max, vdd);
+
+    if (timer_elapsed32(window_start) >= 3000) {
+        snprintf(line, sizeof(line), " a6 %d %d-%d vdd %d-%d\n", flips, a6_min, a6_max, vdd_min, vdd_max);
+        send_string_with_delay(line, 20);
+        clear_keyboard();
+        window_start = timer_read32();
+        flips        = 0;
+        a6_min = vdd_min = 99999;
+        a6_max = vdd_max = 0;
+    }
+}
+#endif
+
 void bnk16_diag_task(void) {
+#ifdef BNK16_VBUS_PROBE
+    vbus_probe_task();
+#endif
+#ifdef BNK16_SLEEP_DIAG
+    sleep_report_task();
+#endif
 #ifdef BNK16_INTERVAL_DEBUG
     interval_report_task();
 #endif

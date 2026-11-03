@@ -139,7 +139,20 @@
  * pin scan drives each free pin in turn, switch probe reports every pin state change. */
 // #define BNK16_PIN_SCAN
 // #define BNK16_SWITCH_PROBE
+// #define BNK16_VBUS_PROBE /* types the PA6 and chip supply voltage range every 3 s, see bnk16_diag.c */
 // #define BNK16_INTERVAL_DEBUG /* types what the BLE link really uses after each wake-up, see bnk16_diag.c */
 // #define BNK16_POWER_DIAG /* asleep: knob timer slowed to 250 Hz after the KNOB time, chip off after the OFF time, see power_management.c */
 #define BNK16_POWER_DIAG_KNOB_TIME (2 * 60 * 1000) /* 250 Hz loses the key that wakes the board, so not used outside the diagnostic */
 #define BNK16_POWER_DIAG_OFF_TIME  (3 * 60 * 1000) /* chip off, no wake-up: measured 92 uA for the board */
+/* Deep sleep with the link kept (chip sleeps between radio events, pin wake-up). Does not work on this board:
+ * the chip's sleep mode cut the power (phase 38e/f), its halt mode never woke up (38g). Needs HAL_SLEEP 1 in
+ * mcuconf.h. BNK16_SLEEP_HALT uses halt instead of sleep. The board shuts down instead, see power_management.h. */
+// #define BNK16_DEEP_SLEEP
+// #define BNK16_SLEEP_HALT
+// #define BNK16_SLEEP_DIAG /* types a line of sleep counters over BLE after every connection, see bnk16_diag.c */
+// #define BNK16_POWER_TEST /* power measurements: each power stage lasts 30 s instead of 5 min */
+#ifdef BNK16_POWER_TEST
+#define POWER_SLEEP_TIMEOUT_MS    (30 * 1000) /* awake -> sleep */
+#define BLE_CONN_INTERVAL_L1_TIME (30 * 1000) /* sleep 15 ms -> 100-120 ms */
+#define POWER_SHUTDOWN_TIMEOUT_MS (90 * 1000) /* -> shutdown, after the last key */
+#endif
