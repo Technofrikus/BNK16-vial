@@ -21,10 +21,10 @@
 #include "ble_app.h"
 #include "eeconfig.h"
 #include "power_management.h"
-#include "bnk16_diag.h"
 
+/* Vial shows and stores its custom keycodes as QK_KB_0 + index, in the order of customKeycodes in vial.json */
 enum custom_keycodes {
-    BT_1 = QK_USER_0,
+    BT_1 = QK_KB_0,
     BT_2,
     BT_3,
     BT_CLEAR,
@@ -40,9 +40,6 @@ enum custom_keycodes {
     HAPTIC_RESET,
     LED_MASK,
 };
-
-/* Vial shows and stores its custom keycodes as 0x7E00 + index (QK_KB_0), so use that in the default map too */
-#define VIAL_KC(kc) (QK_KB_0 + ((kc) - BT_1))
 
 // clang-format off
 #define EMPTY_LAYER LAYOUT( \
@@ -64,7 +61,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [1] = EMPTY_LAYER,
     [2] = EMPTY_LAYER,
     [3] = LAYOUT(
-        VIAL_KC(BT_1), VIAL_KC(BT_2), VIAL_KC(BT_3), KC_NO,
+        BT_1,    BT_2,    BT_3,    KC_NO,
         KC_NO,   KC_NO,   KC_NO,   KC_NO,
         KC_NO,   KC_NO,   KC_NO,   KC_NO,
         KC_NO,   KC_NO,   KC_NO,   KC_NO,
@@ -115,60 +112,42 @@ static uint32_t hold_time_of(uint16_t keycode) {
     }
 }
 
+/* The BLE side keeps the fixed interval across reconnects and ignores the sleep steps while it is set */
 static void toggle_mobile_mode(void) {
     mobile_mode_active = !mobile_mode_active;
-    power_set_mobile_mode(mobile_mode_active);
     bnk16_status_mobile_mode(mobile_mode_active);
-    if (mobile_mode_active) {
-        ble_set_conn_interval_raw(MOBILE_CONN_INTERVAL);
-    } else {
-        ble_request_conn_interval_force(0);
-    }
+    ble_set_fixed_conn_interval(mobile_mode_active ? MOBILE_CONN_INTERVAL : 0);
 }
 
+/* The EEPROM driver writes synchronously, so the reset can follow at once */
 static void factory_reset(void) {
     ble_clear_bonds();
     eeconfig_init();
-    /* give the EEPROM writes time to finish before the reset */
-    for (volatile int i = 0; i < 1000000; i++) {
-    }
     PFIC_SystemReset();
 }
 
-/* True for the brake key as stored in the keymap (Vial stores its custom keycodes as 0x7E00 + index) */
+/* Used by the LED overlay in bnk16.c */
 bool bnk16_keycode_is_haptic_brake(uint16_t keycode) {
-    return keycode == HAPTIC_BRAKE || keycode == 0x7E00 + (HAPTIC_BRAKE - BT_1);
+    return keycode == HAPTIC_BRAKE;
 }
 
-/* Same for the knob resolution keys */
 bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up) {
-    uint16_t knob_key = up ? KNOB_RES_UP : KNOB_RES_DOWN;
-    return keycode == knob_key || keycode == 0x7E00 + (knob_key - BT_1);
+    return keycode == (up ? KNOB_RES_UP : KNOB_RES_DOWN);
 }
 
 /* Device number 1-3 of a BT key, 0 for any other key */
 uint8_t bnk16_keycode_bt_device(uint16_t keycode) {
-    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= BT_3 - BT_1) {
-        return (keycode & 0xFF) + 1;
-    }
     return keycode >= BT_1 && keycode <= BT_3 ? device_of(keycode) : 0;
 }
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
-#ifdef BNK16_INTERVAL_DEBUG
-        bnk16_diag_note_key();
-#endif
         power_notify_activity();
     }
 
-    /* Vial stores its custom keycodes as 0x7E00 + index */
-    if ((keycode >> 8) == 0x7E && (keycode & 0xFF) <= LED_MASK - BT_1) {
-        keycode = BT_1 + (keycode & 0xFF);
-    }
-
-    /* mobile mode locks the keyboard, only its own key still works */
-    if (mobile_mode_active && keycode != MOBILE_MODE) {
+    /* mobile mode locks the keyboard, only its own key still works. Releases pass, so a key held
+     * while mobile mode turned on does not stay down. */
+    if (mobile_mode_active && keycode != MOBILE_MODE && record->event.pressed) {
         return false;
     }
 

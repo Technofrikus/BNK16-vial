@@ -36,6 +36,7 @@ static uint16_t battery_mv;    /* smoothed, 0 = not measured yet */
 static uint8_t  battery_level = 100;
 static uint32_t battery_last_measure;
 static uint8_t  battery_measurements; /* up to BATTERY_CRITICAL_MIN_MEASUREMENTS */
+static uint16_t battery_peak_mv;      /* highest smoothed voltage since it rose to the charging level */
 
 /* the smoothing needs a few readings before a low value is trusted for a shutdown */
 #define BATTERY_CRITICAL_MIN_MEASUREMENTS 4
@@ -82,6 +83,11 @@ static void battery_update(void)
 
     uint16_t mv = battery_read_mv();
     battery_mv  = battery_mv ? (battery_mv * 3 + mv) / 4 : mv;
+    if (battery_mv < BATTERY_CHARGING_VOLTAGE_MV) {
+        battery_peak_mv = 0;
+    } else if (battery_mv > battery_peak_mv) {
+        battery_peak_mv = battery_mv;
+    }
     if (battery_measurements < BATTERY_CRITICAL_MIN_MEASUREMENTS) {
         battery_measurements++;
     }
@@ -117,13 +123,10 @@ bool battery_is_critical(void)
     return battery_measurements >= BATTERY_CRITICAL_MIN_MEASUREMENTS && battery_mv < BATTERY_SHUTDOWN_VOLTAGE_MV;
 }
 
+/* No charger status pin, see battery.h. The charger holds the cell flat at 4.2 V; a full cell without the
+ * cable (or after the charger stopped) slowly falls from there, so a drop from the peak ends charging. */
 bool battery_is_charging(void)
 {
     battery_update();
-    return battery_mv >= BATTERY_CHARGING_VOLTAGE_MV; /* no charger status pin, see battery.h */
-}
-
-bool battery_is_battery_powered(void)
-{
-    return false; /* no VBUS pin */
+    return battery_mv >= BATTERY_CHARGING_VOLTAGE_MV && battery_mv + BATTERY_CHARGING_DROP_MV > battery_peak_mv;
 }

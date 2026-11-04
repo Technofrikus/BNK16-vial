@@ -67,9 +67,8 @@ Build the EVB target on the branch before opening the PR, because `bnk16` does n
 
 ## Blockers for the board target
 
-- Remove `VIAL_INSECURE`.
 - Replace the self-chosen, unregistered ID `5650:0b16` with an assigned VID/PID.
-- Bring up the mode switch or remove the BLE keycodes from `vial.json`.
+- The EVB target no longer builds on our branch: `keyboards/ch585_evb/power_management.c` still uses `BLE_CONN_INTERVAL_L0_TIME`/`L2_TIME`, which our `ble/include/ble_config.h` dropped (two interval levels since phase 35). Fix that before any PR that touches `ble/`.
 
 ## Conventions upstream asks for
 

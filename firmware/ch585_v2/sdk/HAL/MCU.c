@@ -121,7 +121,7 @@ void CH58X_BLEInit(void)
   #endif
 #endif
 #if(defined(HAL_SLEEP)) && (HAL_SLEEP == TRUE)
-    /* CH585 library: no WakeUpTime, CH58X_LowPower wakes early by itself */
+    cfg.WakeUpTime = WAKE_UP_RTC_MAX_TIME;
     cfg.idleCB = CH58X_LowPower; // 启用睡眠
 #endif
 #if(defined(BLE_MAC)) && (BLE_MAC == TRUE)

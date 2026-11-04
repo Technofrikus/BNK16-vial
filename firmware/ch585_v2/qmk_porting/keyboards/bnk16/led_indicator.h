@@ -1,7 +1,7 @@
 /*
- * LED指示灯驱动
- * LED0(PB14) = 连接状态灯，LED1(PB15) = 电源/充电灯
- * 正常使用时全部熄灭，状态变化时才提示
+ * Status LED API of the shared BLE and USB code. The BNK16 has no discrete status LEDs (PB14/PB15 are
+ * the small left knob here), so led_indicator.c implements it as no-ops; the status LED in the RGB
+ * chain is driven by bnk16.c.
  */
 
 #pragma once

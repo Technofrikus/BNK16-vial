@@ -59,7 +59,6 @@ if(BUILD_WIRELESS_LIB OR(NOT BLE_ENABLE AND NOT ESB_ENABLE))
     list(APPEND ch582_sdk_temp
         "${CMAKE_CURRENT_LIST_DIR}/HAL/MCU.c"
         "${CMAKE_CURRENT_LIST_DIR}/HAL/RTC.c"
-        "${CMAKE_CURRENT_LIST_DIR}/HAL/SLEEP.c"
     )
     target_sources(CH582_APP INTERFACE
         ${ch582_sdk_temp}

@@ -67,20 +67,6 @@ void ble_send_keyboard_release(void);
 /* 重试待发送的HID报告（主循环里调用）*/
 void ble_retry_pending_report(void);
 
-/* What was asked of the host and what the link really uses, for BNK16_INTERVAL_DEBUG. Units as in BLE. */
-typedef struct {
-    uint16_t requests;
-    uint16_t requested_max;
-    uint8_t request_status;
-    uint16_t updates;
-    uint16_t interval;
-    uint16_t latency;
-    uint16_t timeout;
-    uint16_t terminations;  /* links ended, and the reason of the last one (HCI error code) */
-    uint8_t term_reason;
-} ble_conn_debug_t;
-extern ble_conn_debug_t ble_conn_debug;
-
 /* 获取当前 BLE 连接状态 */
 ble_state_t ble_get_state(void);
 
@@ -128,11 +114,10 @@ uint8_t ble_get_current_device(void);
 /* Called from main after init: restores the slot. It starts on GAPROLE_STARTED, if not in wired mode. */
 void ble_restore_last_mode(void);
 
-/* 连接间隔动态调整
- * 档位0~4 对应 100/300/500/800/1000ms，电源管理模块按睡眠时长调用
- */
+/* Connection interval levels 0 .. BLE_CONN_INTERVAL_LEVELS-1 (ble_config.h), stepped by the power
+ * management by time asleep */
 
-/* 请求切换连接间隔档位（0~4），带5秒防抖 */
+/* Request a level, at most one request per 5 s; ignored while a fixed interval is set */
 void ble_request_conn_interval(uint8_t level);
 
 /* 强制切换连接间隔档位（绕过防抖，用于携带模式切换）*/
@@ -141,7 +126,11 @@ void ble_request_conn_interval_force(uint8_t level);
 /* 直接设置连接间隔（单位1.25ms，用于携带模式2000ms=1600）*/
 void ble_set_conn_interval_raw(uint16_t interval);
 
-/* 获取当前连接间隔档位（0~3）*/
+/* Fixed interval (units of 1.25 ms) that also holds across reconnects and ignores the level requests,
+ * 0 = back to the levels (mobile mode) */
+void ble_set_fixed_conn_interval(uint16_t interval);
+
+/* Requested level, 0xFF for a raw or fixed interval */
 uint8_t ble_get_current_interval_level(void);
 
 #endif /* __BLE_APP_H */

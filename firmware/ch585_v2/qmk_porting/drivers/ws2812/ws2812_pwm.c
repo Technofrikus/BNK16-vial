@@ -333,6 +333,10 @@ void ws2812_init(void)
 
 static ws2812_led_t ws2812_leds[WS2812_LED_COUNT];
 
+#ifndef WS2812_POWER_UP_US
+#define WS2812_POWER_UP_US 1000 /* supply settle time before the repeated first frame */
+#endif
+
 static void ws2812_write_led(uint16_t led_number, uint8_t r, uint8_t g, uint8_t b, uint8_t w)
 {
     // Write color to frame buffer
@@ -369,7 +373,24 @@ void ws2812_flush(void)
         return;
     }
 
-    if (!ws2812_power_get()) {
+#if defined(WS2812_EN_PIN) && defined(WS2812_POWER_OFF_DELAY_MS)
+    /* Black LEDs still draw current: cut the supply once the frames have been all black for a while.
+     * The next frame with any colour switches it on again and is sent as usual. */
+    static uint16_t black_since;
+    bool            black = true;
+    for (uint16_t i = 0; i < WS2812_LED_COUNT && black; i++) {
+        black = !ws2812_leds[i].r && !ws2812_leds[i].g && !ws2812_leds[i].b;
+    }
+    if (!black) {
+        black_since = timer_read();
+    } else if (timer_elapsed(black_since) >= WS2812_POWER_OFF_DELAY_MS) {
+        ws2812_power_toggle(false);
+        return;
+    }
+#endif
+
+    bool powered_up = !ws2812_power_get();
+    if (powered_up) {
         ws2812_power_toggle(true);
     }
 
@@ -388,4 +409,16 @@ void ws2812_flush(void)
     }
 
     ws2812_start_frame();
+
+#ifdef WS2812_POWER_OFF_DELAY_MS
+    /* The LEDs may miss a frame that starts right as their supply comes up, and a caller that only flushes
+     * on a change would not send another one: send it twice */
+    if (powered_up) {
+        uint16_t timeout_timer = timer_read();
+        while (ws2812_frame_busy && timer_elapsed(timeout_timer) < WS2812_TIMEOUT) {
+        }
+        wait_us(WS2812_POWER_UP_US);
+        ws2812_start_frame();
+    }
+#endif
 }

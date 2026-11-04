@@ -125,8 +125,9 @@ static ble_pending_extra_t pending_extra[] = {
 #define BLE_PENDING_EXTRA_COUNT (sizeof(pending_extra) / sizeof(pending_extra[0]))
 
 /* Connection interval state, see the end of this file */
-static uint8_t current_interval_level;
-static uint32_t last_param_update_time;
+static uint8_t current_interval_level = 0;
+static uint32_t last_param_update_time = 0;
+static uint16_t fixed_conn_interval = 0;   /* mobile mode, 0 = none */
 
 /* 前向声明 */
 static void bond_table_load(void);
@@ -444,7 +445,9 @@ static uint16_t ble_process_event(uint8_t task_id, uint16_t events)
 
     /* 参数更新事件 — 请求更新连接间隔 */
     if (events & START_PARAM_UPDATE_EVT) {
-        if (current_state == BLE_STATE_CONNECTED) {
+        if (current_state == BLE_STATE_CONNECTED && fixed_conn_interval != 0) {
+            ble_set_conn_interval_raw(fixed_conn_interval);
+        } else if (current_state == BLE_STATE_CONNECTED) {
             GAPRole_PeripheralConnParamUpdateReq(conn_handle,
                 BLE_MIN_CONN_INTERVAL,
                 BLE_MAX_CONN_INTERVAL,
@@ -580,10 +583,6 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
              * 6. CONNECTED: the link dropped: reconnect to the current slot
              * SWITCHING with nothing pending, IDLE, STANDBY: nothing to do
              */
-            if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
-                ble_conn_debug.terminations++;
-                ble_conn_debug.term_reason = pEvent->linkTerminate.reason;
-            }
             conn_handle = GAP_CONNHANDLE_INIT;
             conn_peer_valid = false;
             link_secure = false;
@@ -1324,36 +1323,17 @@ void ble_app_poll(void)
  * 调用 GAPRole_PeripheralConnParamUpdateReq() 发起请求，主机接受后生效
  * ======================================================================== */
 
-/* 当前请求的连接间隔档位（0~4）*/
-static uint8_t current_interval_level = 0;
-
-/* 上次参数更新请求时间（防抖用）*/
-static uint32_t last_param_update_time = 0;
-
 /* 防抖最小间隔：两次请求至少间隔5秒 */
 #define PARAM_UPDATE_MIN_INTERVAL_MS  5000
-
-ble_conn_debug_t ble_conn_debug;
-
-/* Called when the link really changed, from the stack's parameter update callback */
-void ble_note_conn_update(uint16_t interval, uint16_t latency, uint16_t timeout)
-{
-    ble_conn_debug.updates++;
-    ble_conn_debug.interval = interval;
-    ble_conn_debug.latency = latency;
-    ble_conn_debug.timeout = timeout;
-}
 
 /* 核心：发送连接间隔更新请求 */
 static void ble_send_conn_interval_req(uint16_t min_interval, uint16_t max_interval)
 {
     if (current_state != BLE_STATE_CONNECTED) return;
-    ble_conn_debug.request_status = GAPRole_PeripheralConnParamUpdateReq(conn_handle,
+    GAPRole_PeripheralConnParamUpdateReq(conn_handle,
         min_interval, max_interval,
         min_interval == BLE_CONN_INTERVAL_L0_MIN ? BLE_SLAVE_LATENCY : 0, BLE_CONN_TIMEOUT,
         ble_task_id);
-    ble_conn_debug.requests++;
-    ble_conn_debug.requested_max = max_interval;
     last_param_update_time = timer_read32();
 }
 
@@ -1369,6 +1349,7 @@ static void ble_send_conn_level_req(uint8_t level)
 /* 请求切换连接间隔档位（带5秒防抖）*/
 void ble_request_conn_interval(uint8_t level)
 {
+    if (fixed_conn_interval != 0) return;
     if (level >= BLE_CONN_INTERVAL_LEVELS) return;
     if (level == current_interval_level) return;
 
@@ -1403,7 +1384,18 @@ void ble_set_conn_interval_raw(uint16_t interval)
     current_interval_level = 0xFF; /* 标记为非标准档位 */
 }
 
-/* 获取当前请求的连接间隔档位（0~3）*/
+/* Mobile mode: sent now if connected, and again after every reconnect (START_PARAM_UPDATE_EVT) */
+void ble_set_fixed_conn_interval(uint16_t interval)
+{
+    fixed_conn_interval = interval;
+    if (interval != 0) {
+        ble_set_conn_interval_raw(interval);
+    } else {
+        ble_request_conn_interval_force(0);
+    }
+}
+
+/* Requested level, 0xFF for a raw or fixed interval */
 uint8_t ble_get_current_interval_level(void)
 {
     return current_interval_level;

@@ -276,13 +276,20 @@ static void status_led_task(void) {
     }
 }
 
+/* Blue blinking while BLE looks for a host: fast = pairing, slow = searching. False if it does not. */
+static bool ble_waiting_color(rgb_t *color) {
+    if (ble_is_pairing() || ble_is_searching()) {
+        *color = blink_on(ble_is_pairing() ? BLINK_PAIRING_MS : BLINK_SEARCHING_MS) ? COLOR_BLUE : COLOR_OFF;
+        return true;
+    }
+    return false;
+}
+
 /* Highest priority first: pairing, searching, result and mobile mode messages, layer colour */
 static rgb_t status_led_color(void) {
-    if (ble_is_pairing()) {
-        return blink_on(BLINK_PAIRING_MS) ? COLOR_BLUE : COLOR_OFF;
-    }
-    if (ble_is_searching()) {
-        return blink_on(BLINK_SEARCHING_MS) ? COLOR_BLUE : COLOR_OFF;
+    rgb_t color;
+    if (ble_waiting_color(&color)) {
+        return color;
     }
     uint32_t elapsed = timer_elapsed32(status_msg_start);
     switch (status_msg) {
@@ -322,21 +329,12 @@ static bool key_color(uint16_t keycode, rgb_t *color) {
     }
     /* the key of the selected Bluetooth device shows its connection */
     uint8_t device = bnk16_keycode_bt_device(keycode);
-    if (device != 0) {
-        if (device == ble_get_current_device()) {
-            if (ble_is_connected()) {
-                *color = COLOR_BLUE;
-                return true;
-            }
-            if (ble_is_pairing()) {
-                *color = blink_on(BLINK_PAIRING_MS) ? COLOR_BLUE : COLOR_OFF;
-                return true;
-            }
-            if (ble_is_searching()) {
-                *color = blink_on(BLINK_SEARCHING_MS) ? COLOR_BLUE : COLOR_OFF;
-                return true;
-            }
+    if (device != 0 && device == ble_get_current_device()) {
+        if (ble_is_connected()) {
+            *color = COLOR_BLUE;
+            return true;
         }
+        return ble_waiting_color(color);
     }
     return false;
 }
@@ -402,8 +400,8 @@ static void leds_off_task(void) {
         rgb_t color = COLOR_OFF;
         if (led == BNK16_STATUS_LED) {
             color = status_led_color();
-        } else if (led < BNK16_KEY_LED_COUNT && !key_color(active_keycode_of_led(led), &color)) {
-            color = COLOR_OFF;
+        } else if (led < BNK16_KEY_LED_COUNT) {
+            key_color(active_keycode_of_led(led), &color); /* leaves it off for any other key */
         }
         color = scale_to_brightness(color);
         if (color.r != last[led].r || color.g != last[led].g || color.b != last[led].b) {
@@ -426,6 +424,7 @@ static void leds_off_task(void) {
  * period out of phase with the drive, to counter the ringing. The drive can only push one way, so
  * this damps the motor instead of stopping it.
  * ======================================================================== */
+/* The board's settings word in EEPROM (eeconfig_read_kb): haptics, big knob resolution and the LED mask */
 typedef union {
     uint32_t raw;
     struct {
@@ -437,11 +436,11 @@ typedef union {
         uint32_t unused : 4;
         uint32_t magic : 8;
     };
-} haptic_config_t;
+} kb_config_t;
 
-#define HAPTIC_MAGIC 0xA9 /* tells this layout from older stored words */
+#define KB_CONFIG_MAGIC 0xA9 /* tells this layout from older stored words */
 
-static haptic_config_t haptic_config;
+static kb_config_t kb_config;
 
 static volatile uint8_t haptic_slot;
 static volatile uint8_t haptic_slots;      /* slots of the whole pattern, incl. brake */
@@ -476,91 +475,91 @@ __INTERRUPT __HIGH_CODE void TMR0_IRQHandler(void) {
 /* (Re)starts the pattern; a burst that is still running is cut off and begins again */
 static void haptic_buzz(void) {
     PFIC_DisableIRQ(TMR0_IRQn);
-    haptic_brake       = haptic_config.brake;
-    haptic_drive_slots = 2 * haptic_config.pulses - 1;
+    haptic_brake       = kb_config.brake;
+    haptic_drive_slots = 2 * kb_config.pulses - 1;
     haptic_slots       = haptic_drive_slots + (haptic_brake ? 3 : 0);
     haptic_slot        = 0;
     haptic_running     = true;
     haptic_pin(true);
-    TMR0_TimerInit(FREQ_SYS / (2 * haptic_config.freq_hz));
+    TMR0_TimerInit(FREQ_SYS / (2 * kb_config.freq_hz));
     TMR0_ClearITFlag(RB_TMR_IF_CYC_END);
     TMR0_ITCfg(ENABLE, RB_TMR_IE_CYC_END);
     PFIC_EnableIRQ(TMR0_IRQn);
 }
 
-static void haptic_set_defaults(void) {
-    haptic_config.raw     = 0;
-    haptic_config.magic   = HAPTIC_MAGIC;
-    haptic_config.freq_hz = BNK16_HAPTIC_FREQ_HZ;
-    haptic_config.pulses  = BNK16_HAPTIC_PULSES;
-    haptic_config.knob_steps = BNK16_BIG_STEPS_PER_KEY;
-    haptic_config.brake   = BNK16_HAPTIC_BRAKE;
+static void kb_config_set_defaults(void) {
+    kb_config.raw     = 0;
+    kb_config.magic   = KB_CONFIG_MAGIC;
+    kb_config.freq_hz = BNK16_HAPTIC_FREQ_HZ;
+    kb_config.pulses  = BNK16_HAPTIC_PULSES;
+    kb_config.knob_steps = BNK16_BIG_STEPS_PER_KEY;
+    kb_config.brake   = BNK16_HAPTIC_BRAKE;
 }
 
 /* After a reset, a factory reset or an older stored layout the word is invalid: use the defaults */
-static void haptic_load_config(void) {
-    haptic_config.raw = eeconfig_read_kb();
-    if (haptic_config.magic != HAPTIC_MAGIC || haptic_config.freq_hz < BNK16_HAPTIC_FREQ_MIN || haptic_config.freq_hz > BNK16_HAPTIC_FREQ_MAX || haptic_config.pulses < 1 || haptic_config.pulses > BNK16_HAPTIC_PULSES_MAX || haptic_config.knob_steps < 1 || haptic_config.knob_steps > BNK16_BIG_STEPS_PER_KEY_MAX) {
-        haptic_set_defaults();
+static void kb_config_load(void) {
+    kb_config.raw = eeconfig_read_kb();
+    if (kb_config.magic != KB_CONFIG_MAGIC || kb_config.freq_hz < BNK16_HAPTIC_FREQ_MIN || kb_config.freq_hz > BNK16_HAPTIC_FREQ_MAX || kb_config.pulses < 1 || kb_config.pulses > BNK16_HAPTIC_PULSES_MAX || kb_config.knob_steps < 1 || kb_config.knob_steps > BNK16_BIG_STEPS_PER_KEY_MAX) {
+        kb_config_set_defaults();
     }
 }
 
 static void haptic_save_and_buzz(void) {
-    eeconfig_update_kb(haptic_config.raw);
+    eeconfig_update_kb(kb_config.raw);
     haptic_buzz();
 }
 
 /* Called by the custom keycodes in keymap.c; every change gives a sample burst */
 void bnk16_haptic_reset(void) {
-    bool show_unassigned = haptic_config.show_unassigned;
-    haptic_set_defaults();
-    haptic_config.show_unassigned = show_unassigned;
+    bool show_unassigned = kb_config.show_unassigned;
+    kb_config_set_defaults();
+    kb_config.show_unassigned = show_unassigned;
     haptic_save_and_buzz();
 }
 
 void bnk16_toggle_show_unassigned(void) {
-    haptic_config.show_unassigned = !haptic_config.show_unassigned;
-    eeconfig_update_kb(haptic_config.raw);
+    kb_config.show_unassigned = !kb_config.show_unassigned;
+    eeconfig_update_kb(kb_config.raw);
 }
 
 bool bnk16_show_unassigned(void) {
-    return haptic_config.show_unassigned;
+    return kb_config.show_unassigned;
 }
 
 void bnk16_haptic_toggle_brake(void) {
-    haptic_config.brake = !haptic_config.brake;
+    kb_config.brake = !kb_config.brake;
     haptic_save_and_buzz();
 }
 
 void bnk16_haptic_change_freq(bool up) {
-    uint16_t freq = haptic_config.freq_hz;
+    uint16_t freq = kb_config.freq_hz;
     if (up ? freq + BNK16_HAPTIC_FREQ_STEP <= BNK16_HAPTIC_FREQ_MAX : freq - BNK16_HAPTIC_FREQ_STEP >= BNK16_HAPTIC_FREQ_MIN) {
-        haptic_config.freq_hz = up ? freq + BNK16_HAPTIC_FREQ_STEP : freq - BNK16_HAPTIC_FREQ_STEP;
+        kb_config.freq_hz = up ? freq + BNK16_HAPTIC_FREQ_STEP : freq - BNK16_HAPTIC_FREQ_STEP;
     }
     haptic_save_and_buzz();
 }
 
 void bnk16_haptic_change_length(bool up) {
-    if (up ? haptic_config.pulses < BNK16_HAPTIC_PULSES_MAX : haptic_config.pulses > 1) {
-        haptic_config.pulses = up ? haptic_config.pulses + 1 : haptic_config.pulses - 1;
+    if (up ? kb_config.pulses < BNK16_HAPTIC_PULSES_MAX : kb_config.pulses > 1) {
+        kb_config.pulses = up ? kb_config.pulses + 1 : kb_config.pulses - 1;
     }
     haptic_save_and_buzz();
 }
 
 /* Higher resolution = fewer steps per key press */
 void bnk16_knob_change_resolution(bool up) {
-    if (up ? haptic_config.knob_steps > 1 : haptic_config.knob_steps < BNK16_BIG_STEPS_PER_KEY_MAX) {
-        haptic_config.knob_steps = up ? haptic_config.knob_steps - 1 : haptic_config.knob_steps + 1;
+    if (up ? kb_config.knob_steps > 1 : kb_config.knob_steps < BNK16_BIG_STEPS_PER_KEY_MAX) {
+        kb_config.knob_steps = up ? kb_config.knob_steps - 1 : kb_config.knob_steps + 1;
     }
     haptic_save_and_buzz();
 }
 
 bool bnk16_haptic_brake_on(void) {
-    return haptic_config.brake;
+    return kb_config.brake;
 }
 
 uint8_t bnk16_knob_steps(void) {
-    return haptic_config.knob_steps;
+    return kb_config.knob_steps;
 }
 
 /* ========================================================================
@@ -623,8 +622,7 @@ static void knob_timer_start(void) {
     PFIC_EnableIRQ(TMR2_IRQn);
 }
 
-/* In deep sleep a pin interrupt watches the knob instead. bnk16_big_raw keeps the last state, so the
- * first sample after the restart counts the step that woke the board. */
+/* Before the shutdown: the wake-up pins take over */
 static void knob_timer_stop(void) {
     PFIC_DisableIRQ(TMR2_IRQn);
     TMR2_ITCfg(DISABLE, RB_TMR_IE_CYC_END);
@@ -676,13 +674,6 @@ __INTERRUPT __HIGH_CODE void TMR2_IRQHandler(void) {
     }
 }
 
-#ifdef BNK16_POWER_DIAG
-/* Knob sampling at 4 kHz or 250 Hz. Not stopped: its interrupt is what wakes the main loop from WFI */
-void bnk16_knob_timer(bool fast) {
-    TMR2_TimerInit(FREQ_SYS / (fast ? 4000 : 250));
-}
-#endif
-
 /* One key press and one haptic burst per N steps; a change of direction restarts the count. Steps that
  * come too soon after the last key or find the queue full are dropped without a burst, so a click always
  * means a key was sent and no backlog can build up. */
@@ -695,7 +686,7 @@ static void big_knob_step(bool positive) {
         last_positive = positive;
         step_count    = 0;
     }
-    if (++step_count < haptic_config.knob_steps) {
+    if (++step_count < kb_config.knob_steps) {
         return;
     }
     step_count = 0;
@@ -725,102 +716,38 @@ void matrix_scan_kb(void) {
 #endif
 
 /* ========================================================================
- * Deep sleep (power_management.c decides when): the core stops between radio events, and pin
- * interrupts wake it. Rows are driven low, so any key pulls its column low (COL2ROW diodes).
- * Only PB0-PB15 can interrupt on the CH585: the small right knob (PB16/PB17) does not wake the board,
- * its click does (row PB21 x column PB4). PB10 (layer switch) floats instead of waking: in positions
- * 1-3 it sits low through a diode, and the pull-up would draw current all the time. The matrix reads
- * the switch again after the next wake-up. PB11 wakes on the move to the USB position.
+ * Shutdown (power_management.c decides when), the way the stock firmware sleeps: end the link, arm the
+ * wake-up pins, then switch the chip off (LowPower_Shutdown, no RAM kept). A wake-up pin restarts it from
+ * reset, and the normal boot reconnects. USB is not kept, so the caller checks bnk16_shutdown_possible().
+ * Rows are driven low, so any key pulls its column low (COL2ROW diodes). Only PB0-PB15 can wake the
+ * CH585: the small right knob (PB16/PB17) does not, its click does (row PB21 x column PB4).
+ * A pull-up against a closed contact draws tens of microamps (phase 39b: 200 uA in all), so:
+ *   PB10 (layer switch) floats: in positions 1-3 it sits low through a diode.
+ *   PB11 floats and does not wake: it sits at GND in the BT position (moving the switch to USB with a
+ *   cable in then needs a key).
+ *   An encoder pin on a closed contact gets a pull-down and does not wake: the knob wakes once a
+ *   contact that rests open closes.
  * ======================================================================== */
-static const pin_t   sleep_row_pins[] = MATRIX_ROW_PINS;
-static const pin_t   sleep_col_pins[] = { B5, B4, B6, B7 };
-static const pin_t   sleep_enc_pins[] = { B14, B15, B8, B9 };
-static volatile bool sleep_woken;
-static uint16_t      sleep_wake_mask; /* the armed pins in R16_PB_INT_IF */
+#define SHUTDOWN_DISCONNECT_MS 300 /* lets the stack tell the host the link ends */
+
+static const pin_t shutdown_row_pins[] = MATRIX_ROW_PINS;
+static const pin_t shutdown_col_pins[] = { B5, B4, B6, B7 };
+static const pin_t shutdown_enc_pins[] = { B14, B15, B8, B9 };
 
 /* pin_t is the GPIO_Pin_x mask with bit 31 set for port B */
 static inline uint32_t port_b_bit(pin_t pin) {
     return pin & 0x7FFFFFFF;
 }
 
+/* Never runs: interrupts stay off from the arming to the shutdown, the pending flags do the waking */
 __INTERRUPT __HIGH_CODE void GPIOB_IRQHandler(void) {
-    R16_PB_INT_EN = 0; /* one wake-up is enough, the pins go back to QMK */
     R16_PB_INT_IF = 0xFFFF;
-    sleep_woken   = true;
 }
 
-/* USB in use or a haptic burst still running: stay awake */
-bool bnk16_deep_sleep_possible(void) {
+/* USB in use or a haptic burst still running: stay on */
+bool bnk16_shutdown_possible(void) {
     return !usb_is_connected() && !haptic_running;
 }
-
-void bnk16_deep_sleep_enter(void) {
-#ifdef ENCODER_ENABLE
-    knob_timer_stop();
-#endif
-    PFIC_DisableIRQ(GPIO_B_IRQn);
-    R16_PB_INT_EN = 0;
-    sleep_woken   = false;
-
-    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_row_pins); i++) {
-        gpio_write_pin_low(sleep_row_pins[i]);
-        gpio_set_pin_output(sleep_row_pins[i]);
-    }
-    gpio_set_pin_input(B10);
-    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_col_pins); i++) {
-        GPIOB_ITModeCfg(port_b_bit(sleep_col_pins[i]), GPIO_ITMode_FallEdge);
-    }
-    /* encoder contacts rest open or closed: wake on the edge away from the current level */
-    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_enc_pins); i++) {
-        pin_t pin = sleep_enc_pins[i];
-        GPIOB_ITModeCfg(port_b_bit(pin), gpio_read_pin(pin) ? GPIO_ITMode_FallEdge : GPIO_ITMode_RiseEdge);
-    }
-    GPIOB_ITModeCfg(GPIO_Pin_11, GPIO_ITMode_RiseEdge);
-    sleep_wake_mask = R16_PB_INT_EN;
-
-    sys_safe_access_enable();
-    R8_SLP_WAKE_CTRL |= RB_SLP_GPIO_WAKE;
-    sys_safe_access_disable();
-    PFIC_EnableIRQ(GPIO_B_IRQn);
-
-    /* a key pressed while the pins were armed has no edge left: wake at once */
-    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_col_pins); i++) {
-        if (!gpio_read_pin(sleep_col_pins[i])) {
-            sleep_woken = true;
-        }
-    }
-}
-
-bool bnk16_deep_sleep_woken(void) {
-    return sleep_woken;
-}
-
-/* Back to the pin states QMK expects between scans (rows unselected) */
-void bnk16_deep_sleep_exit(void) {
-    extern void USBHS_Device_Init(FunctionalState sta);
-
-    PFIC_DisableIRQ(GPIO_B_IRQn);
-    R16_PB_INT_EN = 0;
-    R16_PB_INT_IF = 0xFFFF;
-    sys_safe_access_enable();
-    R8_SLP_WAKE_CTRL &= ~RB_SLP_GPIO_WAKE;
-    sys_safe_access_disable();
-
-    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_row_pins); i++) {
-        gpio_set_pin_input_high(sleep_row_pins[i]);
-    }
-    gpio_set_pin_input_high(B10);
-#ifdef ENCODER_ENABLE
-    knob_timer_start();
-#endif
-    /* the SDK: after a sleep with the USB/BLE power domain kept (RB_PWR_EXTEND), reset the USBHS registers */
-    USBHS_Device_Init(ENABLE);
-}
-
-/* Shutdown, the way the stock firmware sleeps: end the link, arm the wake-up pins as for deep sleep, then
- * switch the chip off (LowPower_Shutdown, no RAM kept). A wake-up pin restarts it from reset, and the
- * normal boot reconnects. USB is not kept, so the caller checks bnk16_deep_sleep_possible() first. */
-#define SHUTDOWN_DISCONNECT_MS 300 /* lets the stack tell the host the link ends */
 
 __attribute__((noreturn)) void bnk16_shutdown(void) {
     ble_radio_off();
@@ -829,35 +756,53 @@ __attribute__((noreturn)) void bnk16_shutdown(void) {
         TMOS_SystemProcess();
     }
 
-    /* interrupts off for good: the pin handler would disable the wake-up pins on the first edge, while a
-     * pending flag keeps them working */
     unsigned long irq_status;
     SYS_DisableAllIrq(&irq_status);
-    bnk16_deep_sleep_enter();
-    /* Shut down, the chip draws microamps, while a pull-up against a closed contact draws tens of them
-     * (phase 39b: 200 uA). PB11 sits at GND in the BT position, so it floats and does not wake (moving the
-     * switch to USB with a cable in then needs a key). An encoder pin on a closed contact gets a pull-down
-     * and does not wake either: the knob wakes once a contact that rests open closes. */
-    R16_PB_INT_EN &= ~GPIO_Pin_11;
-    gpio_set_pin_input(B11);
-    for (uint8_t i = 0; i < ARRAY_SIZE(sleep_enc_pins); i++) {
-        pin_t pin = sleep_enc_pins[i];
-        if (!gpio_read_pin(pin)) {
-            R16_PB_INT_EN &= ~port_b_bit(pin);
+#ifdef ENCODER_ENABLE
+    knob_timer_stop();
+#endif
+    PFIC_DisableIRQ(GPIO_B_IRQn);
+    R16_PB_INT_EN = 0;
+
+    for (uint8_t i = 0; i < ARRAY_SIZE(shutdown_row_pins); i++) {
+        gpio_write_pin_low(shutdown_row_pins[i]);
+        gpio_set_pin_output(shutdown_row_pins[i]);
+    }
+    gpio_set_pin_input(B10);
+    for (uint8_t i = 0; i < ARRAY_SIZE(shutdown_col_pins); i++) {
+        GPIOB_ITModeCfg(port_b_bit(shutdown_col_pins[i]), GPIO_ITMode_FallEdge);
+    }
+    for (uint8_t i = 0; i < ARRAY_SIZE(shutdown_enc_pins); i++) {
+        pin_t pin = shutdown_enc_pins[i];
+        if (gpio_read_pin(pin)) {
+            GPIOB_ITModeCfg(port_b_bit(pin), GPIO_ITMode_FallEdge);
+        } else {
             gpio_set_pin_input_low(pin);
         }
     }
-    sleep_wake_mask = R16_PB_INT_EN;
-    /* a key pressed by now has no edge left to wake the chip. Only the armed pins count: the flags of the
-     * other port B pins latch too (phase 39: PB10 of the layer switch rebooted every shutdown attempt). */
-    if (bnk16_deep_sleep_woken() || (R16_PB_INT_IF & sleep_wake_mask)) {
-        DIAG_CRUMB(DIAG_CRUMB_SHUTDOWN_ABORT);
+    gpio_set_pin_input(B11);
+    uint16_t wake_mask = R16_PB_INT_EN;
+
+    sys_safe_access_enable();
+    R8_SLP_WAKE_CTRL |= RB_SLP_GPIO_WAKE;
+    sys_safe_access_disable();
+    PFIC_EnableIRQ(GPIO_B_IRQn);
+
+    /* A key pressed by now has no edge left to wake the chip: reboot instead. Only the armed pins count:
+     * the flags of the other port B pins latch too (phase 39: PB10 of the layer switch rebooted every
+     * shutdown attempt). */
+    bool key_down = false;
+    for (uint8_t i = 0; i < ARRAY_SIZE(shutdown_col_pins); i++) {
+        if (!gpio_read_pin(shutdown_col_pins[i])) {
+            key_down = true;
+        }
+    }
+    if (key_down || (R16_PB_INT_IF & wake_mask)) {
         SYS_ResetExecute();
     }
     sys_safe_access_enable();
     R8_SLP_WAKE_CTRL = RB_WAKE_EV_MODE | RB_SLP_GPIO_WAKE;
     sys_safe_access_disable();
-    DIAG_CRUMB(DIAG_CRUMB_SHUTDOWN);
     LowPower_Shutdown(0);
     SYS_ResetExecute(); /* not reached: LowPower_Shutdown() resets after the wake-up */
     __builtin_unreachable();
@@ -869,18 +814,13 @@ int main(void) {
     extern void protocol_post_init();
     extern void platform_run();
 
-    bnk16_diag_boot();
     platform_setup();
 
     bnk16_pins_prepare();
 
-    /* PA11 switches the LED supply (WS2812_EN_PIN), the RGB driver owns it; start with LEDs off */
-    GPIOA_ModeCfg(GPIO_Pin_11, GPIO_ModeOut_PP_5mA);
-#if WS2812_EN_LEVEL
-    GPIOA_ResetBits(GPIO_Pin_11);
-#else
-    GPIOA_SetBits(GPIO_Pin_11);
-#endif
+    /* LED supply off until the RGB driver switches it on with the first frame */
+    gpio_write_pin(WS2812_EN_PIN, !WS2812_EN_LEVEL);
+    gpio_set_pin_output(WS2812_EN_PIN);
 
     protocol_setup();
 #if !defined ESB_ENABLE || ESB_ENABLE != 2
@@ -889,7 +829,7 @@ int main(void) {
 
     protocol_pre_init();
     keyboard_init();
-    haptic_load_config();
+    kb_config_load();
     protocol_post_init();
 
     battery_init();

@@ -16,12 +16,14 @@
  * 4.18-4.19 V with the cable in, phase 40c), a cell on its own rests below. A full cell with the charger
  * done reads the same with or without the cable, so this only sees a cable while the battery charges. */
 #define BATTERY_CHARGING_VOLTAGE_MV  4150
+/* A full cell resting after the charge stays above that level for a while: once the voltage has fallen this
+ * far below its peak, it no longer counts as charging */
+#define BATTERY_CHARGING_DROP_MV     20
 
 void     battery_init(void);
 uint8_t  battery_get_level(void);       /* 0-100 %, 100 while charging */
 uint16_t battery_get_voltage_mv(void);  /* smoothed battery voltage */
 bool     battery_is_critical(void);     /* below BATTERY_SHUTDOWN_VOLTAGE_MV */
-bool     battery_is_charging(void);     /* at or above BATTERY_CHARGING_VOLTAGE_MV */
-bool     battery_is_battery_powered(void); /* always false: no VBUS pin */
+bool     battery_is_charging(void);     /* at the charging level and not falling */
 
 #endif /* __BATTERY_H */
