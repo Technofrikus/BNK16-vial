@@ -161,7 +161,6 @@ led_config_t g_led_config = {
 
 /* Full scale colours, set_led_scaled() applies the Vial brightness */
 static const rgb_t COLOR_OFF   = {.r = 0, .g = 0, .b = 0};
-static const rgb_t COLOR_WHITE = {.r = 255, .g = 255, .b = 255};
 static const rgb_t COLOR_RED   = {.r = 255, .g = 0, .b = 0};
 static const rgb_t COLOR_GREEN = {.r = 0, .g = 255, .b = 0};
 static const rgb_t COLOR_BLUE  = {.r = 0, .g = 0, .b = 255};
@@ -177,7 +176,6 @@ static const rgb_t layer_colors[] = {
 #define STATUS_CONNECTED_MS     2000
 #define STATUS_FLASH_FAILED_MS  600   /* one period of the red flashes */
 #define STATUS_FLASH_FAILED_N   3
-#define STATUS_FLASH_MOBILE_MS  400   /* one period of the white flashes */
 #define BLINK_PAIRING_MS        500
 #define BLINK_SEARCHING_MS      1000
 #define LEDS_OFF_REFRESH_MS     50
@@ -187,23 +185,15 @@ typedef enum {
     STATUS_MSG_NONE,
     STATUS_MSG_FAILED,
     STATUS_MSG_CONNECTED,
-    STATUS_MSG_MOBILE,
 } status_msg_t;
 
 static status_msg_t status_msg;
-static uint8_t      status_msg_flashes;
 static uint32_t     status_msg_start;
 static uint32_t     status_layer_start;
 
-static void status_msg_show(status_msg_t msg, uint8_t flashes) {
-    status_msg         = msg;
-    status_msg_flashes = flashes;
-    status_msg_start   = timer_read32();
-}
-
-/* Called by the mobile mode key: 2 flashes = on, 1 = off */
-void bnk16_status_mobile_mode(bool on) {
-    status_msg_show(STATUS_MSG_MOBILE, on ? 2 : 1);
+static void status_msg_show(status_msg_t msg) {
+    status_msg       = msg;
+    status_msg_start = timer_read32();
 }
 
 static inline bool blink_on(uint16_t period_ms) {
@@ -256,19 +246,14 @@ static void status_led_task(void) {
     } else if (ble_waiting) {
         ble_waiting = false;
         if (ble_is_connected()) {
-            status_msg_show(STATUS_MSG_CONNECTED, 0);
+            status_msg_show(STATUS_MSG_CONNECTED);
         } else if (!wired_mode_active) {
-            status_msg_show(STATUS_MSG_FAILED, STATUS_FLASH_FAILED_N);
+            status_msg_show(STATUS_MSG_FAILED);
         }
     }
 
     if (status_msg != STATUS_MSG_NONE) {
-        uint32_t duration = STATUS_CONNECTED_MS;
-        if (status_msg == STATUS_MSG_FAILED) {
-            duration = STATUS_FLASH_FAILED_MS * status_msg_flashes;
-        } else if (status_msg == STATUS_MSG_MOBILE) {
-            duration = STATUS_FLASH_MOBILE_MS * status_msg_flashes;
-        }
+        uint32_t duration = status_msg == STATUS_MSG_FAILED ? STATUS_FLASH_FAILED_MS * STATUS_FLASH_FAILED_N : STATUS_CONNECTED_MS;
         if (timer_elapsed32(status_msg_start) >= duration) {
             status_msg         = STATUS_MSG_NONE;
             status_layer_start = timer_read32();
@@ -285,7 +270,7 @@ static bool ble_waiting_color(rgb_t *color) {
     return false;
 }
 
-/* Highest priority first: pairing, searching, result and mobile mode messages, layer colour */
+/* Highest priority first: pairing, searching, result messages, layer colour */
 static rgb_t status_led_color(void) {
     rgb_t color;
     if (ble_waiting_color(&color)) {
@@ -297,8 +282,6 @@ static rgb_t status_led_color(void) {
             return elapsed % STATUS_FLASH_FAILED_MS < STATUS_FLASH_FAILED_MS / 2 ? COLOR_RED : COLOR_OFF;
         case STATUS_MSG_CONNECTED:
             return COLOR_BLUE;
-        case STATUS_MSG_MOBILE:
-            return elapsed % STATUS_FLASH_MOBILE_MS < STATUS_FLASH_MOBILE_MS / 2 ? COLOR_WHITE : COLOR_OFF;
         default:
             break;
     }

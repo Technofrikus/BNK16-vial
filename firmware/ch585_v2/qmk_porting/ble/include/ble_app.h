@@ -117,7 +117,7 @@ void ble_restore_last_mode(void);
 /* Connection interval levels 0 .. BLE_CONN_INTERVAL_LEVELS-1 (ble_config.h), stepped by the power
  * management by time asleep */
 
-/* Request a level, at most one request per 5 s; ignored while a fixed interval is set */
+/* Request a level, at most one request per 5 s */
 void ble_request_conn_interval(uint8_t level);
 
 /* 强制切换连接间隔档位（绕过防抖，用于携带模式切换）*/
@@ -126,11 +126,7 @@ void ble_request_conn_interval_force(uint8_t level);
 /* 直接设置连接间隔（单位1.25ms，用于携带模式2000ms=1600）*/
 void ble_set_conn_interval_raw(uint16_t interval);
 
-/* Fixed interval (units of 1.25 ms) that also holds across reconnects and ignores the level requests,
- * 0 = back to the levels (mobile mode) */
-void ble_set_fixed_conn_interval(uint16_t interval);
-
-/* Requested level, 0xFF for a raw or fixed interval */
+/* Requested level, 0xFF for a raw interval */
 uint8_t ble_get_current_interval_level(void);
 
 #endif /* __BLE_APP_H */

@@ -50,7 +50,7 @@ void power_task(void)
     }
 
     if (current_power_state == POWER_STATE_SLEEPING) {
-        /* slower BLE interval after a while asleep; ignored while mobile mode holds its own interval */
+        /* slower BLE interval after a while asleep */
         uint8_t target_level = now - sleep_start_time >= BLE_CONN_INTERVAL_L1_TIME ? 1 : 0;
         if (target_level != ble_get_current_interval_level()) {
             ble_request_conn_interval(target_level);

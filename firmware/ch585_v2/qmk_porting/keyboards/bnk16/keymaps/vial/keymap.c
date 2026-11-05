@@ -7,8 +7,6 @@
  *   BT_1 / BT_2 / BT_3  tap: switch to that device, hold 3 s: pair it; nothing in the USB switch position
  *   BT_CLEAR            clear all bonds at once on a single tap, so not on the default map
  *   FACTORY_RESET       hold 5 s: clear bonds and settings, then reboot
- *   MOBILE_MODE         hold 3 s: toggle mobile mode (keys locked, 2 s BLE connection interval); in the USB
- *                       switch position it can only be turned off
  *   HAPTIC_FREQ_DOWN/UP burst frequency, 8 Hz per press
  *   HAPTIC_LEN_DOWN/UP  burst length, 1 push pulse per press
  *   HAPTIC_BRAKE        brake pulse after the burst on/off
@@ -29,7 +27,6 @@ enum custom_keycodes {
     BT_3,
     BT_CLEAR,
     FACTORY_RESET,
-    MOBILE_MODE,
     HAPTIC_FREQ_DOWN,
     HAPTIC_FREQ_UP,
     HAPTIC_LEN_DOWN,
@@ -87,14 +84,11 @@ const uint16_t PROGMEM encoder_map[][NUM_ENCODERS][NUM_DIRECTIONS] = {
  * Long press handling for the custom keycodes
  * ======================================================================== */
 #define BT_PAIR_HOLD_MS       3000
-#define MOBILE_MODE_HOLD_MS   3000
 #define FACTORY_RESET_HOLD_MS 5000
-#define MOBILE_CONN_INTERVAL  1600 /* 2000 ms in units of 1.25 ms */
 
 static uint16_t long_press_keycode;   /* key being timed, 0 = none */
 static uint32_t long_press_start;
 static bool     long_press_triggered; /* fires once per press */
-static bool     mobile_mode_active;
 
 /* BT_1/2/3 to device number 1/2/3 */
 static uint8_t device_of(uint16_t keycode) {
@@ -102,21 +96,7 @@ static uint8_t device_of(uint16_t keycode) {
 }
 
 static uint32_t hold_time_of(uint16_t keycode) {
-    switch (keycode) {
-        case FACTORY_RESET:
-            return FACTORY_RESET_HOLD_MS;
-        case MOBILE_MODE:
-            return MOBILE_MODE_HOLD_MS;
-        default:
-            return BT_PAIR_HOLD_MS;
-    }
-}
-
-/* The BLE side keeps the fixed interval across reconnects and ignores the sleep steps while it is set */
-static void toggle_mobile_mode(void) {
-    mobile_mode_active = !mobile_mode_active;
-    bnk16_status_mobile_mode(mobile_mode_active);
-    ble_set_fixed_conn_interval(mobile_mode_active ? MOBILE_CONN_INTERVAL : 0);
+    return keycode == FACTORY_RESET ? FACTORY_RESET_HOLD_MS : BT_PAIR_HOLD_MS;
 }
 
 /* The EEPROM driver writes synchronously, so the reset can follow at once */
@@ -143,12 +123,6 @@ uint8_t bnk16_keycode_bt_device(uint16_t keycode) {
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         power_notify_activity();
-    }
-
-    /* mobile mode locks the keyboard, only its own key still works. Releases pass, so a key held
-     * while mobile mode turned on does not stay down. */
-    if (mobile_mode_active && keycode != MOBILE_MODE && record->event.pressed) {
-        return false;
     }
 
     /* after a reconnect timeout any key restarts the reconnect; the BT keys choose a slot themselves */
@@ -188,7 +162,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         return false;
     }
 
-    if (keycode < BT_1 || keycode > MOBILE_MODE) {
+    if (keycode < BT_1 || keycode > FACTORY_RESET) {
         return true;
     }
 
@@ -216,18 +190,10 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 void housekeeping_task_user(void) {
     if (long_press_keycode != 0 && !long_press_triggered && timer_read32() - long_press_start >= hold_time_of(long_press_keycode)) {
         long_press_triggered = true;
-        switch (long_press_keycode) {
-            case FACTORY_RESET:
-                factory_reset();
-                break;
-            case MOBILE_MODE:
-                if (!wired_mode_active || mobile_mode_active) {
-                    toggle_mobile_mode();
-                }
-                break;
-            default:
-                ble_pair_device(device_of(long_press_keycode));
-                break;
+        if (long_press_keycode == FACTORY_RESET) {
+            factory_reset();
+        } else {
+            ble_pair_device(device_of(long_press_keycode));
         }
     }
 

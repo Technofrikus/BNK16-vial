@@ -42,7 +42,6 @@ bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up);
 /* LED settings and states, used by keymap.c */
 void bnk16_toggle_show_unassigned(void);
 bool bnk16_show_unassigned(void);
-void bnk16_status_mobile_mode(bool on);
 uint8_t bnk16_keycode_bt_device(uint16_t keycode);
 
 /* Shutdown, used by power_management.c */
