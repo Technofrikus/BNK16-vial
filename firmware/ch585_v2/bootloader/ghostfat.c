@@ -5,12 +5,15 @@
  * and writes are only looked at for UF2 blocks. Each UF2 block carries its own flash address, so it does
  * not matter where the host puts the file on the "disk".
  *
- * Safe against interrupted updates: the first flash page of the firmware (its reset jump, or the MCUboot
- * header of a stock image) is erased by the first accepted block and written back only after all blocks
- * of the file have arrived. Until then the bootloader sees no firmware and stays in update mode.
+ * Safe against interrupted updates: before anything of the firmware is erased, a "begin" record is
+ * written to the state block below APP_START; the firmware's start page (its reset jump, or the MCUboot
+ * header of a stock image) is held in RAM and written last, followed by a CRC-protected "done" record.
+ * Until that record is valid the bootloader sees no firmware and stays in update mode, whatever
+ * moment the power goes away. A different file of the same size, or a retry after an error, restarts
+ * the update instead of being merged into it.
  *
  * Two kinds of UF2 are accepted: ours (family BL_UF2_FAMILY, firmware at APP_START) and Binepad's stock
- * updates (family 0x1aa143c7, MCUboot image at 0x18000). Nothing below APP_START is ever written.
+ * updates (family 0x1aa143c7, MCUboot image at 0x18000). Of the area below APP_START only the state block is ever written.
  */
 
 #include <string.h>
@@ -159,12 +162,54 @@ typedef struct {
 } uf2_block_t;
 _Static_assert(sizeof(uf2_block_t) == 512, "UF2 block must be 512 bytes");
 
+/* ---------- update state (power-fail safety) ---------- */
+
+#define STATE_MAGIC_BEGIN 0xB16B0A55u
+#define STATE_MAGIC_DONE  0xB16B0D0Eu
+#define STATE_BEGIN_ADDR  (STATE_ADDR)
+#define STATE_DONE_ADDR   (STATE_ADDR + FLASH_PAGE)
+
+static uint32_t crc32(const uint8_t *p, uint32_t n)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    while (n--) {
+        crc ^= *p++;
+        for (int i = 0; i < 8; i++) {
+            crc = (crc >> 1) ^ (0xEDB88320u & -(crc & 1u));
+        }
+    }
+    return ~crc;
+}
+
+/* Judged at every boot, see IMAGE_STATE_* in bootloader.h. An update that was cut short, even in the
+ * middle of an erase or a page write, leaves either no "begin" record (firmware untouched, legacy
+ * check) or a begin record without a valid "done" record (stay in the bootloader). */
+uint32_t image_state(void)
+{
+    if (*(volatile const uint32_t *)STATE_BEGIN_ADDR == 0xFFFFFFFFu) {
+        return IMAGE_STATE_LEGACY;
+    }
+    uint32_t rec[5];
+    for (int i = 0; i < 5; i++) {
+        rec[i] = ((volatile const uint32_t *)STATE_DONE_ADDR)[i];
+    }
+    if (rec[0] != STATE_MAGIC_DONE || crc32((const uint8_t *)rec, 16) != rec[4]) {
+        return IMAGE_STATE_INVALID;
+    }
+    if (rec[2] != APP_START && rec[2] != STOCK_SLOT) {
+        return IMAGE_STATE_INVALID;
+    }
+    return rec[2];
+}
+
+/* ---------- UF2 update ---------- */
+
 #define APP_SIZE    (FLASH_END - APP_START)
 #define MAX_BLOCKS  (APP_SIZE / FLASH_PAGE)
 #define APP_ERASE_BLOCKS (APP_SIZE / FLASH_BLOCK)
 
 static struct {
-    bool active;                               /* an update has started (first page erased) */
+    bool active;                               /* an update has started (state written, start pages erased) */
     bool done;
     bool failed;
     uint32_t num_blocks;
@@ -205,17 +250,76 @@ __HIGH_CODE static bool flash_page(uint32_t addr, const uint8_t *data)
     return FLASH_ROM_VERIFY(addr, tmp, FLASH_PAGE) == 0;
 }
 
-static void handle_uf2_block(const uf2_block_t *b)
+/* true if the flash page at addr already holds exactly data */
+__HIGH_CODE static bool flash_page_equals(uint32_t addr, const uint8_t *data)
+{
+    static __attribute__((aligned(4))) uint8_t tmp[FLASH_PAGE];
+    memcpy(tmp, data, FLASH_PAGE);
+    return FLASH_ROM_VERIFY(addr, tmp, FLASH_PAGE) == 0;
+}
+
+/* Write one state record page: words[0..n) followed by 0xFF */
+static bool write_state_page(uint32_t addr, const uint32_t *words, uint32_t n)
+{
+    static __attribute__((aligned(4))) uint8_t page[FLASH_PAGE];
+    memset(page, 0xFF, sizeof(page));
+    memcpy(page, words, n * 4);
+    return flash_page(addr, page);
+}
+
+/* Start of a new update. Order matters: the state block is erased and the "begin" record written
+ * first, only then the firmware's start pages go. */
+static bool begin_update(void)
+{
+    if (FLASH_ROM_ERASE(STATE_ADDR, FLASH_BLOCK) != 0) {
+        return false;
+    }
+    const uint32_t begin = STATE_MAGIC_BEGIN;
+    if (!write_state_page(STATE_BEGIN_ADDR, &begin, 1)) {
+        return false;
+    }
+    /* Invalidate both firmware kinds. The state already says "incomplete", this also keeps the
+     * legacy check (wchisp-flashed boards without records) from seeing old code. */
+    return ensure_erased(APP_START) && ensure_erased(STOCK_SLOT);
+}
+
+/* The last page of an update: the image's start page, then the "done" record. */
+static bool commit_update(void)
+{
+    if (!flash_page(st.image_start, st.first_page)) {
+        return false;
+    }
+    uint32_t rec[5] = {STATE_MAGIC_DONE, st.family, st.image_start, st.num_blocks, 0};
+    rec[4] = crc32((const uint8_t *)rec, 16);
+    return write_state_page(STATE_DONE_ADDR, rec, 5);
+}
+
+/* Is this a plausible start page for the image kind? Catches a file of the right family with the
+ * wrong content before it is made bootable. */
+static bool start_page_ok(uint32_t image_start, const uint8_t *d)
+{
+    uint32_t w = (uint32_t)d[0] | (uint32_t)d[1] << 8 | (uint32_t)d[2] << 16 | (uint32_t)d[3] << 24;
+    if (image_start == STOCK_SLOT) {
+        uint32_t hdr_size = (uint32_t)d[8] | (uint32_t)d[9] << 8;
+        return w == STOCK_IMAGE_MAGIC && hdr_size >= 32 && hdr_size <= 0x1000 && (hdr_size % 4) == 0;
+    }
+    /* our firmware starts with a jump to its startup code: jal (32 bit) or c.j (16 bit) */
+    return (w & 0x7F) == 0x6F || ((w & 3) == 1 && ((w >> 13) & 7) == 5);
+}
+
+/* Handle a sector the host wrote. Returns false if it was a UF2 block of the running update and the
+ * update has failed (so the host sees a write error instead of a silent success). */
+static bool handle_uf2_block(const uf2_block_t *b)
 {
     if (b->magic_start0 != UF2_MAGIC_START0 || b->magic_start1 != UF2_MAGIC_START1 ||
         b->magic_end != UF2_MAGIC_END) {
-        return;
+        return true;                           /* not a UF2 block: FAT, directory, other files */
     }
     if (b->flags & UF2_FLAG_NOFLASH) {
-        return;
+        return true;
     }
     if (!(b->flags & UF2_FLAG_FAMILY_ID)) {
-        return;
+        return true;
     }
     /* Each image has a start page that is written last, so a half-written image never boots:
      * ours starts at APP_START, Binepad's stock image with its MCUboot header at STOCK_SLOT. */
@@ -225,65 +329,90 @@ static void handle_uf2_block(const uf2_block_t *b)
     } else if (b->family_id == STOCK_UF2_FAMILY) {
         image_start = STOCK_SLOT;
     } else {
-        return;                                /* not for this board */
+        return true;                           /* not for this board */
     }
     if (b->payload_size != FLASH_PAGE || (b->target_addr % FLASH_PAGE) != 0 ||
         b->target_addr < APP_START || b->target_addr + FLASH_PAGE > FLASH_END) {
-        return;                                /* never touch the bootloader itself */
+        return true;                           /* never touch the bootloader itself */
     }
     if (b->num_blocks == 0 || b->num_blocks > MAX_BLOCKS || b->block_no >= b->num_blocks) {
-        return;
+        return true;
     }
-    if (st.done || st.failed) {
-        return;
+    if (st.done) {
+        return true;                           /* finished, the board is about to restart */
     }
 
-    if (!st.active || b->num_blocks != st.num_blocks || b->family_id != st.family) {
-        /* new update: invalidate both firmware kinds right away. Ours is checked first at boot, so a
-         * stock image only boots once our start page is gone. */
+    bool fresh = !st.active || b->num_blocks != st.num_blocks || b->family_id != st.family;
+
+    if (!fresh && bit_get(st.seen, b->block_no)) {
+        /* a retry of a block we have (same content), or a different file with the same size and
+         * family (different content): that one must not be merged into the update in progress */
+        bool same;
+        if (b->target_addr == st.image_start) {
+            same = st.first_page_held && memcmp(st.first_page, b->data, FLASH_PAGE) == 0;
+        } else {
+            same = flash_page_equals(b->target_addr, b->data);
+        }
+        if (same) {
+            return !st.failed;
+        }
+        fresh = true;
+    }
+    if (!fresh && st.failed) {
+        /* a failed update can be retried without replugging: block 0 starts it over */
+        if (b->block_no != 0) {
+            return false;
+        }
+        fresh = true;
+    }
+
+    if (fresh) {
         memset(&st, 0, sizeof(st));
         st.active = true;
         st.num_blocks = b->num_blocks;
         st.family = b->family_id;
         st.image_start = image_start;
-        if (!ensure_erased(APP_START) || !ensure_erased(STOCK_SLOT)) {
+        if (!begin_update()) {
             st.failed = true;
-            return;
+            return false;
         }
     }
-    if (bit_get(st.seen, b->block_no)) {
-        return;                                /* host retried a block */
-    }
+
     if (!ensure_erased(b->target_addr)) {
         st.failed = true;
-        return;
+        return false;
     }
 
     if (b->target_addr == st.image_start) {
+        if (!start_page_ok(st.image_start, b->data)) {
+            st.failed = true;                  /* wrong content: refuse to make it bootable */
+            return false;
+        }
         memcpy(st.first_page, b->data, FLASH_PAGE);
         st.first_page_held = true;
     } else if (!flash_page(b->target_addr, b->data)) {
         st.failed = true;
-        return;
+        return false;
     }
 
     bit_set(st.seen, b->block_no);
     st.received++;
 
     if (st.received == st.num_blocks) {
-        /* everything is in: writing the first page makes the firmware bootable */
-        if (!st.first_page_held || !flash_page(st.image_start, st.first_page)) {
+        /* everything is in: writing the start page and the done record makes the firmware bootable */
+        if (!st.first_page_held || !commit_update()) {
             st.failed = true;
-            return;
+            return false;
         }
         st.done = true;
     }
+    return true;
 }
 
-void disk_write(uint32_t lba, const uint8_t *buf)
+bool disk_write(uint32_t lba, const uint8_t *buf)
 {
     (void)lba;
-    handle_uf2_block((const uf2_block_t *)buf);
+    return handle_uf2_block((const uf2_block_t *)buf);
 }
 
 bool uf2_update_done(void)

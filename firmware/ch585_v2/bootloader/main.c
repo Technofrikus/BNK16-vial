@@ -4,7 +4,7 @@
  * Sits at 0x0000, the firmware at APP_START. On every reset it decides:
  *
  *   - firmware asked for it (R8_GLOB_RESET_KEEP == 5, set by QK_BOOT / bootloader_jump()) -> bootloader
- *   - no valid firmware (first word erased)                                              -> bootloader
+ *   - no valid firmware (first word erased, or an update through us that never completed) -> bootloader
  *   - power-on reset while the top-left key is held                                      -> bootloader
  *   - otherwise                                     -> jump to our firmware, or to a Binepad stock image
  *
@@ -22,19 +22,19 @@
 #define KEY_ROW_PIN (1u << 3)
 #define KEY_COL_PIN (1u << 5)
 
+/* Idle timeout: one main-loop pass takes about IDLE_TICK_US plus the polling itself, so this is roughly
+ * ten minutes without a USB transfer or bus reset. Not a precise clock. */
+#define IDLE_TICK_US   20u
+#define IDLE_TICKS_MAX (10u * 60u * 1000000u / (IDLE_TICK_US + 2u))
+
 static bool word_programmed(uint32_t addr)
 {
     uint32_t w = *(volatile const uint32_t *)addr;
     return w != 0xFFFFFFFFu && w != 0x00000000u;
 }
 
-/* Where to start the firmware, 0 if there is none. Ours wins; a Binepad stock image is only started
- * when ours is absent (every update erases both start pages first, so only one of them is valid). */
-static uint32_t firmware_entry(void)
+static uint32_t stock_entry(void)
 {
-    if (word_programmed(APP_START)) {
-        return APP_START;
-    }
     if (*(volatile const uint32_t *)STOCK_SLOT == STOCK_IMAGE_MAGIC) {
         uint32_t hdr_size = *(volatile const uint16_t *)(STOCK_SLOT + 8);
         uint32_t entry = STOCK_SLOT + hdr_size;
@@ -43,6 +43,28 @@ static uint32_t firmware_entry(void)
         }
     }
     return 0;
+}
+
+/* Where to start the firmware, 0 if there is none. After an update through this bootloader the state
+ * block says which image is complete (and an interrupted update means none). Without it (board flashed
+ * with wchisp) ours wins and a Binepad stock image is only started when ours is absent. */
+static uint32_t firmware_entry(void)
+{
+    uint32_t state = image_state();
+
+    if (state == IMAGE_STATE_INVALID) {
+        return 0;
+    }
+    if (state == APP_START) {
+        return word_programmed(APP_START) ? APP_START : 0;
+    }
+    if (state == STOCK_SLOT) {
+        return stock_entry();
+    }
+    if (word_programmed(APP_START)) {
+        return APP_START;
+    }
+    return stock_entry();
 }
 
 static bool boot_key_held(void)
@@ -118,14 +140,30 @@ int main(void)
     usb_msc_init();
 
     uint32_t settle_ms = 0;
+    uint32_t idle_ticks = 0;
     for (;;) {
-        usb_msc_poll();
+        if (usb_msc_poll()) {
+            idle_ticks = 0;
+        }
 
         if (uf2_update_done() && usb_msc_idle()) {
             /* let the host finish its directory and FAT writes, then reboot into the new firmware */
             DelayMs(1);
             if (++settle_ms >= 500) {
                 DelayMs(10);
+                SYS_ResetExecute();
+            }
+        } else {
+            settle_ms = 0;                     /* count 500 ms in a row without host traffic */
+        }
+
+        /* The keyboard runs on a battery too: with nobody talking to us (cable pulled, host asleep, the
+         * mode entered by accident) go back to the firmware instead of polling until the battery is empty.
+         * Without a firmware there is nothing to go back to, so keep waiting. */
+        DelayUs(IDLE_TICK_US);
+        if (++idle_ticks >= IDLE_TICKS_MAX) {
+            idle_ticks = 0;
+            if (firmware_entry() != 0) {
                 SYS_ResetExecute();
             }
         }

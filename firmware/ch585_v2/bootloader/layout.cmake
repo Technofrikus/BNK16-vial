@@ -1,7 +1,8 @@
 # Flash layout shared by the bootloader and the BNK16 firmware. Change it only together with a full
 # wchisp flash: a firmware built for one layout does not boot from a bootloader built for another.
 #
-#   0x00000 - 0x07FFF   bootloader (32 KB)
+#   0x00000 - 0x06FFF   bootloader code (28 KB)
+#   0x07000 - 0x07FFF   update state (4 KB, written only by the bootloader while it flashes)
 #   0x08000 - 0x6FFFF   firmware (416 KB)
 #
 # QMK settings and BLE bonds live in the separate 32 KB data flash and are not touched by updates.
@@ -9,6 +10,9 @@
 set(BNK16_FLASH_SIZE      0x70000)   # 448 KB code flash
 set(BNK16_BOOTLOADER_SIZE 0x08000)
 set(BNK16_APP_START       0x08000)
+set(BNK16_STATE_SIZE      0x01000)   # one erase block below the firmware
+math(EXPR BNK16_STATE_ADDR "${BNK16_APP_START} - ${BNK16_STATE_SIZE}" OUTPUT_FORMAT HEXADECIMAL)
+math(EXPR BNK16_CODE_SIZE  "${BNK16_BOOTLOADER_SIZE} - ${BNK16_STATE_SIZE}" OUTPUT_FORMAT HEXADECIMAL)
 math(EXPR BNK16_APP_SIZE "${BNK16_FLASH_SIZE} - ${BNK16_APP_START}" OUTPUT_FORMAT HEXADECIMAL)
 
 # Our own UF2 family ID. Binepad's stock UF2s (0x1aa143c7, MCUboot image at 0x18000) are accepted too,

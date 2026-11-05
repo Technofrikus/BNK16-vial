@@ -15,6 +15,7 @@ UF2_MAGIC_START1 = 0x9E5D5157
 UF2_MAGIC_END = 0x0AB16F30
 UF2_FLAG_FAMILY_ID = 0x00002000
 PAYLOAD = 256
+STATE_SIZE = 0x1000
 
 
 def to_uf2(data: bytes, base: int, family: int) -> bytes:
@@ -40,8 +41,9 @@ def main() -> None:
     boot = open(boot_path, "rb").read()
     app = open(app_path, "rb").read()
 
-    if len(boot) > app_start:
-        sys.exit(f"bootloader is {len(boot)} bytes, does not fit below {app_start:#x}")
+    # the last 4 KB below the firmware belong to the bootloader's update state (see bootloader.h)
+    if len(boot) > app_start - STATE_SIZE:
+        sys.exit(f"bootloader is {len(boot)} bytes, does not fit below {app_start - STATE_SIZE:#x}")
     if not app or app[:4] in (b"\xff\xff\xff\xff", b"\x00\x00\x00\x00"):
         sys.exit("firmware image looks empty")
 

@@ -30,7 +30,8 @@ if(NOT BL_VERSION)
 endif()
 
 set(LINKER_SCRIPT ${PROJECT_BINARY_DIR}/bootloader.ld)
-bnk16_make_linker_script(${LINKER_SCRIPT} 0x00000000 ${BNK16_BOOTLOADER_SIZE})
+# code may only use the area below the update-state block, the linker fails if it grows into it
+bnk16_make_linker_script(${LINKER_SCRIPT} 0x00000000 ${BNK16_CODE_SIZE})
 
 # The SDK startup enters main() in user mode (mstatus MPP = 0). From there the bootloader could not
 # hand over: the firmware's startup writes machine-mode CSRs and would trap. Like WCH's own IAP
@@ -61,6 +62,7 @@ target_include_directories(bnk16_bootloader.elf PRIVATE
 
 target_compile_definitions(bnk16_bootloader.elf PRIVATE
     BL_APP_START=${BNK16_APP_START}
+    BL_STATE_ADDR=${BNK16_STATE_ADDR}
     BL_FLASH_SIZE=${BNK16_FLASH_SIZE}
     BL_UF2_FAMILY=${BNK16_UF2_FAMILY}
     BL_VERSION="${BL_VERSION}"

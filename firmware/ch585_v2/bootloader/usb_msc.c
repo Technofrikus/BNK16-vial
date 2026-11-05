@@ -48,7 +48,10 @@ static const uint8_t qualifier_desc[10] = {
 };
 
 static const uint8_t lang_desc[4] = {4, USB_DESCR_TYP_STRING, 0x09, 0x04};
-static const char *const strings[] = {NULL, "BNK16-vial", "BNK16 UF2 Bootloader", "BNK16BOOT"};
+/* serial number: 12 hex digits of the chip's unique ID (filled in by usb_msc_init), so several boards in
+ * bootloader mode at the same time are told apart. USB MSC wants at least 12 digits. */
+static char serial_str[13] = "BNK16BOOT";
+static const char *const strings[] = {NULL, "BNK16-vial", "BNK16 UF2 Bootloader", serial_str};
 
 /* ---------- buffers ---------- */
 
@@ -57,6 +60,7 @@ static __attribute__((aligned(4))) uint8_t ep1_rx_buf[BULK_HS];
 static __attribute__((aligned(4))) uint8_t ep1_tx_buf[BULK_HS];
 static __attribute__((aligned(4))) uint8_t sector[DISK_SECTOR_SIZE];
 static uint8_t str_buf[2 + 2 * 32];
+static uint8_t other_cfg_desc[32];
 
 /* ---------- control transfer state ---------- */
 
@@ -75,7 +79,9 @@ enum { BOT_CBW, BOT_DATA_IN, BOT_DATA_OUT, BOT_CSW, BOT_WAIT_CLEAR };
 static uint8_t bot_state;
 static uint32_t cbw_tag, cbw_len, bot_left;
 static uint8_t csw_status;
-static bool csw_after_clear;
+static uint8_t csw_clear_ep;                 /* endpoint (0x81 / 0x01) whose halt the host must clear before the CSW, else 0 */
+static bool cbw_dir_in;                      /* data direction announced by the CBW */
+static bool write_failed;                    /* a sector of the current WRITE could not be flashed */
 
 static bool disk_xfer;                       /* data stage reads/writes disk sectors */
 static uint32_t xfer_lba, xfer_off, xfer_left;
@@ -163,6 +169,21 @@ static void send_next_in(void)
     ep1_in_send(chunk);
 }
 
+/* The host expects (or still sends) data we will not transfer: stall that endpoint, the CSW follows
+ * once the host clears the halt. Also the BOT answer when less data than announced was moved and the
+ * last packet was full size, so the host cannot tell the transfer has ended. */
+static void stall_then_csw(bool data_in)
+{
+    bot_state = BOT_WAIT_CLEAR;
+    if (data_in) {
+        csw_clear_ep = 0x81;
+        R8_U2EP1_TX_CTRL = (R8_U2EP1_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_STALL;
+    } else {
+        csw_clear_ep = 0x01;
+        ep1_out_set(USBHS_UEP_R_RES_STALL);
+    }
+}
+
 static void fail_command(uint8_t key, uint8_t asc, bool data_in)
 {
     sense_key = key;
@@ -173,14 +194,19 @@ static void fail_command(uint8_t key, uint8_t asc, bool data_in)
         send_csw();
         return;
     }
-    /* host expected data: stall that endpoint, the CSW follows once the host clears the halt */
     bot_left = cbw_len;
-    bot_state = BOT_WAIT_CLEAR;
-    csw_after_clear = true;
-    if (data_in) {
-        R8_U2EP1_TX_CTRL = (R8_U2EP1_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_STALL;
+    stall_then_csw(data_in);
+}
+
+/* All data of an IN command is sent. Less than announced and ending on a full packet needs a stall,
+ * otherwise the host would wait for more data. */
+static void data_in_finished(void)
+{
+    uint32_t sent = cbw_len - bot_left;
+    if (bot_left != 0 && (sent % bulk_size) == 0) {
+        stall_then_csw(true);
     } else {
-        ep1_out_set(USBHS_UEP_R_RES_STALL);
+        send_csw();
     }
 }
 
@@ -197,7 +223,11 @@ static void respond(const uint8_t *data, uint8_t len)
     csw_status = 0;
     bot_left = cbw_len;
     if (resp_len == 0) {
-        send_csw();
+        if (bot_left == 0) {
+            send_csw();
+        } else {
+            stall_then_csw(cbw_dir_in);        /* host wanted data for a command without any */
+        }
         return;
     }
     bot_state = BOT_DATA_IN;
@@ -218,6 +248,10 @@ static void scsi_command(const uint8_t *cb, bool dir_in)
             return;
 
         case 0x12: /* INQUIRY */
+            if ((cb[1] & 1) || cb[2]) {      /* VPD pages are not supported */
+                fail_command(0x05, 0x24, dir_in); /* ILLEGAL REQUEST, invalid field in CDB */
+                return;
+            }
             memset(buf, 0, sizeof(buf));
             buf[1] = 0x80;                   /* removable */
             buf[2] = 0x02;
@@ -274,7 +308,8 @@ static void scsi_command(const uint8_t *cb, bool dir_in)
             uint32_t bytes = count * DISK_SECTOR_SIZE;
             bool is_read = cb[0] == 0x28;
 
-            if (lba + count > disk_sector_count()) {
+            uint32_t total = disk_sector_count();
+            if (count > total || lba > total - count) { /* written so that lba + count cannot wrap */
                 fail_command(0x05, 0x21, is_read); /* ILLEGAL REQUEST, LBA out of range */
                 return;
             }
@@ -284,9 +319,14 @@ static void scsi_command(const uint8_t *cb, bool dir_in)
             xfer_off = 0;
             xfer_left = bytes;
             csw_status = 0;
+            write_failed = false;
             bot_left = cbw_len;
             if (bytes == 0) {
-                send_csw();
+                if (bot_left == 0) {
+                    send_csw();
+                } else {
+                    stall_then_csw(is_read);
+                }
                 return;
             }
             if (is_read) {
@@ -308,7 +348,8 @@ static void scsi_command(const uint8_t *cb, bool dir_in)
 static void bot_out_packet(const uint8_t *data, uint16_t len)
 {
     if (bot_state == BOT_CBW) {
-        if (len != 31 || get_le32(data) != 0x43425355) { /* "USBC" */
+        uint8_t cb_len = data[14] & 0x1F;
+        if (len != 31 || get_le32(data) != 0x43425355 || cb_len < 1 || cb_len > 16) { /* "USBC" */
             /* invalid CBW: stall both directions until the host resets */
             R8_U2EP1_TX_CTRL = (R8_U2EP1_TX_CTRL & ~USBHS_UEP_T_RES_MASK) | USBHS_UEP_T_RES_STALL;
             ep1_out_set(USBHS_UEP_R_RES_STALL);
@@ -316,7 +357,15 @@ static void bot_out_packet(const uint8_t *data, uint16_t len)
         }
         cbw_tag = get_le32(data + 4);
         cbw_len = get_le32(data + 8);
-        scsi_command(data + 15, (data[12] & 0x80) != 0);
+        cbw_dir_in = (data[12] & 0x80) != 0;
+        write_failed = false;
+        if ((data[13] & 0x0F) != 0) {
+            /* we have a single LUN; REQUEST SENSE / INQUIRY would still be allowed for others,
+             * but a host that asks for LUN > 0 got it from somewhere else, so refuse */
+            fail_command(0x05, 0x25, cbw_dir_in); /* ILLEGAL REQUEST, logical unit not supported */
+        } else {
+            scsi_command(data + 15, cbw_dir_in);
+        }
         if (bot_state == BOT_CBW || bot_state == BOT_DATA_OUT) {
             ep1_out_set(USBHS_UEP_R_RES_ACK);
         }
@@ -333,14 +382,25 @@ static void bot_out_packet(const uint8_t *data, uint16_t len)
             xfer_off += n;
             pos += n;
             if (xfer_off >= DISK_SECTOR_SIZE) {
-                disk_write(xfer_lba++, sector);
+                if (!disk_write(xfer_lba++, sector)) {
+                    write_failed = true;
+                }
                 xfer_off = 0;
             }
         }
         xfer_left -= len;
         bot_left -= len;
         if (xfer_left == 0) {
-            send_csw();
+            if (write_failed) {
+                sense_key = 0x03;              /* MEDIUM ERROR, write error */
+                sense_asc = 0x0C;
+                csw_status = 1;
+            }
+            if (bot_left != 0) {
+                stall_then_csw(false);         /* host announced more data than the command moves */
+            } else {
+                send_csw();
+            }
         } else {
             ep1_out_set(USBHS_UEP_R_RES_ACK);
         }
@@ -354,7 +414,7 @@ static void bot_in_done(void)
         if (more) {
             send_next_in();
         } else {
-            send_csw();
+            data_in_finished();
         }
     } else if (bot_state == BOT_CSW) {
         bot_state = BOT_CBW;
@@ -365,7 +425,8 @@ static void bot_in_done(void)
 static void bot_reset(void)
 {
     bot_state = BOT_CBW;
-    csw_after_clear = false;
+    csw_clear_ep = 0;
+    write_failed = false;
     bot_left = 0;
     ep1_reset();
 }
@@ -410,6 +471,15 @@ static const uint8_t *string_desc(uint8_t idx, uint16_t *len)
     return str_buf;
 }
 
+/* The bulk packet size follows the speed the host chose. Looked at whenever it matters (descriptor
+ * requests and SET_CONFIGURATION), not once: after a bus reset the speed can differ from last time. */
+static void apply_speed(void)
+{
+    bulk_size = (R8_USB2_MIS_ST & USBHS_UDMS_HS_MOD) ? BULK_HS : BULK_FS;
+    cfg_desc[22] = cfg_desc[29] = bulk_size & 0xFF;
+    cfg_desc[23] = cfg_desc[30] = bulk_size >> 8;
+}
+
 static void handle_setup(void)
 {
     PUSB_SETUP_REQ req = (PUSB_SETUP_REQ)ep0_buf;
@@ -445,12 +515,18 @@ static void handle_setup(void)
                         len = sizeof(dev_desc);
                         break;
                     case USB_DESCR_TYP_CONFIG:
-                        /* bulk packet size depends on the negotiated speed */
-                        bulk_size = (R8_USB2_MIS_ST & USBHS_UDMS_HS_MOD) ? BULK_HS : BULK_FS;
-                        cfg_desc[22] = cfg_desc[29] = bulk_size & 0xFF;
-                        cfg_desc[23] = cfg_desc[30] = bulk_size >> 8;
+                        apply_speed();
                         data = cfg_desc;
                         len = sizeof(cfg_desc);
+                        break;
+                    case 0x07: /* OTHER_SPEED_CONFIGURATION: same layout, the other speed's packet size */
+                        apply_speed();
+                        memcpy(other_cfg_desc, cfg_desc, sizeof(cfg_desc));
+                        other_cfg_desc[1] = 0x07;
+                        other_cfg_desc[22] = other_cfg_desc[29] = (bulk_size == BULK_HS ? BULK_FS : BULK_HS) & 0xFF;
+                        other_cfg_desc[23] = other_cfg_desc[30] = (bulk_size == BULK_HS ? BULK_FS : BULK_HS) >> 8;
+                        data = other_cfg_desc;
+                        len = sizeof(other_cfg_desc);
                         break;
                     case USB_DESCR_TYP_QUALIF:
                         data = qualifier_desc;
@@ -476,6 +552,11 @@ static void handle_setup(void)
                 break;
 
             case USB_SET_CONFIGURATION:
+                if ((setup_value & 0xFF) > 1) {
+                    ok = false;                /* only configuration 1 exists */
+                    break;
+                }
+                apply_speed();
                 dev_config = setup_value & 0xFF;
                 bot_reset();
                 break;
@@ -487,6 +568,9 @@ static void handle_setup(void)
                 break;
 
             case USB_SET_INTERFACE:
+                if (setup_value != 0 || (windex & 0xFF) != 0) {
+                    ok = false;                /* one interface, no alternate settings */
+                }
                 break;
 
             case USB_GET_STATUS:
@@ -513,12 +597,13 @@ static void handle_setup(void)
                     } else if ((windex & 0xFF) == 0x01) {
                         /* stay NAK while a CSW is pending: OUT is re-armed once the CSW went out */
                         R8_U2EP1_RX_CTRL = USBHS_UEP_R_TOG_DATA0 |
-                                           (csw_after_clear ? USBHS_UEP_R_RES_NAK : USBHS_UEP_R_RES_ACK);
+                                           (bot_state == BOT_WAIT_CLEAR ? USBHS_UEP_R_RES_NAK : USBHS_UEP_R_RES_ACK);
                     } else {
                         ok = false;
                     }
-                    if (ok && csw_after_clear) {
-                        csw_after_clear = false;
+                    /* the CSW goes out once the endpoint that was stalled is cleared */
+                    if (ok && csw_clear_ep != 0 && csw_clear_ep == (windex & 0xFF)) {
+                        csw_clear_ep = 0;
                         send_csw();
                     }
                 } else if ((setup_type & USB_REQ_RECIP_MASK) != USB_REQ_RECIP_DEVICE) {
@@ -596,6 +681,21 @@ static void ep0_in_done(void)
 
 void usb_msc_init(void)
 {
+    uint8_t mac[6];
+    uint8_t any = 0, all = 0xFF;
+    GetMACAddress(mac);
+    for (int i = 0; i < 6; i++) {
+        any |= mac[i];
+        all &= mac[i];
+    }
+    if (any != 0 && all != 0xFF) {             /* keep the fixed fallback if the ID was never programmed */
+        for (int i = 0; i < 6; i++) {
+            serial_str[2 * i] = "0123456789ABCDEF"[mac[i] >> 4];
+            serial_str[2 * i + 1] = "0123456789ABCDEF"[mac[i] & 0xF];
+        }
+        serial_str[12] = 0;
+    }
+
     /* same sequence as the firmware's USBHS_Device_Init(), without enabling the interrupt */
     R16_CLK_SYS_CFG |= (RB_CLK_SYS_MOD & 0x40) | RB_XROM_SCLK_SEL | RB_OSC32M_SEL;
     R8_USBHS_PLL_CTRL = USBHS_PLL_EN;
@@ -610,9 +710,10 @@ void usb_msc_init(void)
     bot_reset();
 }
 
-void usb_msc_poll(void)
+bool usb_msc_poll(void)
 {
     uint8_t flags = R8_USB2_INT_FG;
+    bool activity = (flags & (USBHS_UDIF_TRANSFER | USBHS_UDIF_BUS_RST)) != 0;
 
     if (flags & USBHS_UDIF_TRANSFER) {
         uint8_t st = R8_USB2_INT_ST;
@@ -663,6 +764,7 @@ void usb_msc_poll(void)
     } else if (flags) {
         R8_USB2_INT_FG = flags;
     }
+    return activity;
 }
 
 bool usb_msc_idle(void)
