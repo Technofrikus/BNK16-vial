@@ -1,0 +1,90 @@
+name: Release
+
+# Builds only when a version tag is pushed, and publishes a GitHub release for it.
+# How to cut a release: see RELEASE.md.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  DOCKER_IMAGE: nookcraftlab/riscv:latest
+  FIRMWARE_PATH: firmware/ch585_v2
+  BUILD_DIR: firmware/ch585_v2/build-bnk16
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0   # full history and tags, needed for the version string and the changelog
+
+      - name: Build firmware and bootloader
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            ${{ env.DOCKER_IMAGE }} \
+            bash /workspace/${{ env.FIRMWARE_PATH }}/build-bnk16.sh
+
+      - name: Collect release files
+        id: files
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          OUT=release
+          mkdir -p "$OUT"
+          cp "$BUILD_DIR/bnk16.uf2"            "$OUT/bnk16-$TAG.uf2"
+          cp "$BUILD_DIR/bnk16_full.bin"       "$OUT/bnk16-$TAG-full.bin"
+          cp "$BUILD_DIR/bnk16.bin"            "$OUT/bnk16-$TAG-app.bin"
+          cp "$BUILD_DIR/bnk16_bootloader.bin" "$OUT/bnk16-bootloader-$TAG.bin"
+          (cd "$OUT" && sha256sum * > SHA256SUMS.txt)
+          ls -l "$OUT"
+
+      - name: Write release notes
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
+          {
+            if [ -n "$PREV" ]; then
+              echo "## Changes since $PREV"
+              RANGE="$PREV..$TAG"
+            else
+              echo "## Changes"
+              RANGE="$TAG"
+            fi
+            echo
+            git log --no-merges --reverse --format='- %s (%h)' "$RANGE"
+            echo
+            echo "## Files"
+            echo
+            echo "| File | Use |"
+            echo "|---|---|"
+            echo "| \`bnk16-$TAG.uf2\` | **Normal update.** Start the bootloader and drag this file onto the \`BNK16BOOT\` drive. |"
+            echo "| \`bnk16-$TAG-full.bin\` | Bootloader + firmware. For the first install, or for recovery, with \`wchisp flash\` (hold BOOT while plugging in). |"
+            echo "| \`bnk16-$TAG-app.bin\` | Firmware only, as a raw image at \`0x8000\`. Not needed for normal use. |"
+            echo "| \`bnk16-bootloader-$TAG.bin\` | Bootloader only. Not needed for normal use. |"
+            echo "| \`SHA256SUMS.txt\` | Checksums. |"
+            echo
+            echo "Save your layout in Vial before updating (File → Save current layout)."
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          FLAGS=""
+          case "$TAG" in *-*) FLAGS="--prerelease" ;; esac   # v1.2.0-rc1 and similar
+          gh release create "$TAG" release/* \
+            --title "BNK16 Vial $TAG" \
+            --notes-file release-notes.md \
+            --verify-tag $FLAGS
