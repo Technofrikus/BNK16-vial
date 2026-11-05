@@ -32,13 +32,25 @@ endif()
 set(LINKER_SCRIPT ${PROJECT_BINARY_DIR}/bootloader.ld)
 bnk16_make_linker_script(${LINKER_SCRIPT} 0x00000000 ${BNK16_BOOTLOADER_SIZE})
 
+# The SDK startup enters main() in user mode (mstatus MPP = 0). From there the bootloader could not
+# hand over: the firmware's startup writes machine-mode CSRs and would trap. Like WCH's own IAP
+# example, the bootloader enters main() in machine mode (mstatus 0x1888), so the firmware starts in the
+# same state as straight after reset.
+file(READ ${SDK}/Startup/startup_CH585.S startup_src)
+string(REPLACE "li t0, 0x88\n" "li t0, 0x1888\n" startup_mm "${startup_src}")
+if(startup_mm STREQUAL startup_src)
+    message(FATAL_ERROR "bootloader: mstatus line not found in startup_CH585.S")
+endif()
+set(STARTUP ${PROJECT_BINARY_DIR}/startup_bootloader.S)
+file(WRITE ${STARTUP} "${startup_mm}")
+
 add_executable(bnk16_bootloader.elf
     main.c
     usb_msc.c
     ghostfat.c
     ${SDK}/StdPeriphDriver/CH58x_sys.c
     ${SDK}/StdPeriphDriver/CH58x_clk.c
-    ${SDK}/Startup/startup_CH585.S
+    ${STARTUP}
 )
 
 target_include_directories(bnk16_bootloader.elf PRIVATE
