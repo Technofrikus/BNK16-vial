@@ -1,33 +1,79 @@
 # BNK16-vial
 
-QMK/Vial firmware for the **Binepad BNK16** macropad (WCH CH585, 16 keys, 3 encoders, 4-position layer switch). It replaces the stock VIA firmware, so Tap Dance, Combos, Key Overrides and macros can be configured in [Vial](https://get.vial.today/).
+A Vial firmware for the **Binepad BNK16** macropad (16 keys, 3 encoders, 4-position layer switch, Bluetooth, WCH CH585 chip). It replaces the stock VIA firmware, so you can remap everything live in [Vial](https://get.vial.today/), and you get Tap Dance, Combos and the rest of Vial's features on top.
 
-Based on [NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch585-qmk-vial). The original README is in [docs/README.upstream.zh.md](docs/README.upstream.zh.md).
+It's based on [NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch585-qmk-vial), which did the hard work of getting QMK running on the CH585.
 
-## Status
+> [!WARNING]
+> **There is no way back to the stock firmware.** Flashing this overwrites Binepad's bootloader. I tried restoring the stock firmware and the board stayed dead: the only stock image you can download is built for a different hardware revision, and the matching one is locked inside the read-protected stock bootloader. Unless Binepad hands out a working image, once you flash this, you stay on this.
+>
+> The board itself can't be bricked though. The real bootloader is in ROM, so you can always flash this firmware again.
 
-| Feature | State |
+## What works
+
+Everything on the PCB:
+
+- All 16 keys
+- The three encoders, including the clicks on the two small ones
+- The haptic motor (detents on the big knob, and you can tune the feel)
+- The 4-position layer switch
+- Bluetooth with three devices, plus USB, selected by the slide switch
+- Battery level reported to your computer over Bluetooth, and sleep/shutdown when idle
+
+And a few things the stock firmware didn't have:
+
+- **Bluetooth status on the keys:** the key bound to the active Bluetooth device lights blue when connected and blinks while pairing or searching
+- **Only bound keys light up:** keys that have nothing assigned in Vial stay dark, so you can see your layout at a glance (there's a key to turn that off)
+- **Status LED** shows the current layer by colour (white, purple, orange, green), blinks blue while connecting, flashes red if a connection fails
+- **Adjustable resolution for the big knob:** how many steps it sends per turn, changeable with two keys that go from green to red as you near the limit
+- **Haptic settings** (frequency, length, brake pulse) changeable with keys and saved on the board
+
+And because it's Vial:
+
+- Live remapping, no flashing needed to change the keymap
+- Tap Dance, Combos, Key Overrides, macros
+- All the modifier shortcuts (`LSA(kc)` and friends), media keys, mouse wheel
+- RGB effects, configurable in Vial's Lighting tab
+
+The Bluetooth, haptic, knob and reset keys are under **User** in Vial's keycode list.
+
+## Default keymap
+
+| Control | Default |
 |---|---|
-| 16 keys, encoder rotation and clicks | works |
-| Media keys, mouse wheel, modifier combos such as `LSA(kc)` | works |
-| RGB with reactive effects, Vial Lighting tab | works |
-| Tap Dance, Combos, macros, settings kept after replug | works |
-| Status LED | works: layer colour, blue while connecting, red flashes when reconnecting fails |
-| 4-position layer switch | works |
-| Bluetooth and mode switch | typing works, three device slots; media keys not yet |
-| Battery, power saving | not done |
-| Haptics | works: big knob detents, settings on the User tab |
-| `VIAL_INSECURE` | still on: Vial is always unlocked, no unlock combo needed |
+| Keys | Numpad on layer 0, Bluetooth device 1-3 on the top row of layer 3, everything else empty |
+| Small left encoder | Volume, click = mute |
+| Small right encoder | Page up/down, click = play/pause |
+| Big knob | Mouse wheel |
+| Layer switch | Layer 0-3 |
 
-## Requirements
+To pair a device, switch to layer 3 and hold BT1, BT2 or BT3 for 3 seconds. Tap it to switch between devices.
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/), running. Docker holds the whole toolchain, so nothing else needs installing to build. The image is about 8 GB and is downloaded on the first build.
-- [wchisp](https://github.com/ch32-rs/wchisp) to flash.
-- Git.
+Vial is locked by default for the risky stuff (matrix tester, macros, bootloader key). To unlock, hold the top-left and top-right key when Vial asks.
 
-## Build
+## Flashing
 
-Clone with the QMK submodule:
+You flash with **wchisp**, a small command line tool for WCH chips. Get it from the [wchisp releases page](https://github.com/ch32-rs/wchisp/releases/tag/nightly) (there are builds for macOS, Linux and Windows). On Windows you might also need the Visual C++ runtime.
+
+1. Get `bnk16.bin`, either from this repo's Releases or by building it yourself (see below).
+2. Hold the BOOT key on the PCB while plugging in the USB cable. The board is now in ISP mode.
+3. Flash right away, ISP mode times out quickly:
+
+```bash
+wchisp flash bnk16.bin
+```
+
+4. Replug the board, open the Vial app or <https://vial.rocks>, and it should show up as "Vialpad BNK16". On Linux you need the [udev rule from the Vial docs](https://get.vial.today/manual/linux-udev.html).
+
+A new build resets the keymap stored on the board, so save your layout in Vial first (File → Save current layout) and load it again afterwards.
+
+Don't run `wchisp config` unless you know why, it can erase the whole chip.
+
+## Building and changing the defaults
+
+You only need this if you want to change something that Vial can't, like the default keymap, the layer colours or the haptics defaults.
+
+You need [Docker](https://www.docker.com/products/docker-desktop/) (it carries the whole toolchain, about 8 GB on the first build) and Git.
 
 ```bash
 git clone --recursive https://github.com/Technofrikus/BNK16-vial.git
@@ -37,77 +83,37 @@ git clone --recursive https://github.com/Technofrikus/BNK16-vial.git
 cd BNK16-vial
 ```
 
-If you already cloned without `--recursive`:
-
-```bash
-git submodule update --init
-```
-
-Build from the repository root:
-
 ```bash
 docker run --rm --platform linux/amd64 -v "$PWD:/workspace" nookcraftlab/riscv:latest bash /workspace/firmware/ch585_v2/build-bnk16.sh
 ```
 
-The result is `firmware/ch585_v2/build-bnk16/bnk16.bin` (also `.hex` and `.elf`). The script deletes that folder first, so every build is a full one.
+The firmware ends up in `firmware/ch585_v2/build-bnk16/bnk16.bin`. On Windows PowerShell use `${PWD}` instead of `$PWD`.
 
-Why Docker: the build needs WCH's own GCC 12 (`riscv-wch-elf-gcc`), which is Linux x64 only. The repo folder is mounted into the container at `/workspace`, so the output lands in your checkout. `--platform linux/amd64` is needed on Apple Silicon and harmless elsewhere. On Windows PowerShell write `${PWD}` instead of `$PWD`.
+### Where things are
 
-## Flash
+Everything specific to the BNK16 lives in [firmware/ch585_v2/qmk_porting/keyboards/bnk16/](firmware/ch585_v2/qmk_porting/keyboards/bnk16/):
 
-**Export your layout first** (Vial: File → Save current layout). Every new build resets the stored keymap to the defaults.
+| File | What's in it |
+|---|---|
+| `keymaps/vial/keymap.c` | **The default keymap** and the custom keycodes |
+| `vial.json` | The layout Vial shows and the names of the custom keycodes |
+| `keymaps/vial/rules.cmake` | Which features are compiled in (Tap Dance, Combos, ...) |
+| `qmk_config.h` | Pins, encoders, RGB, Vial options, haptic defaults |
+| `bnk16.c` | Layer switch, big knob, haptics, status LED, USB/Bluetooth mode |
+| `battery.c`, `power_management.c` | Battery reading, sleep and shutdown |
 
-1. Hold the BOOT key (PB22) while plugging in USB. The board enumerates as `1a86:55e0`.
-2. Flash right away, because ISP mode times out quickly:
+The rest of the repo:
 
-```bash
-wchisp flash firmware/ch585_v2/build-bnk16/bnk16.bin
+```
+firmware/ch585_v2/
+  build-bnk16.sh          build script
+  qmk_firmware/           QMK with Vial (submodule, unmodified)
+  qmk_porting/            the CH585 port: board targets, drivers, Bluetooth
+  user/usb/               USB descriptors and driver
+docs/bnk16/               pin map and development notes
 ```
 
-The bootloader is in mask ROM, so a bad flash cannot brick the board: this procedure always works. Do not run `wchisp config` without a reason, it can trigger a full erase.
-
-Flashing removes Binepad's stock UF2 bootloader, so signed Binepad updates no longer work. **Going back to the stock firmware is probably not possible** — at least on the board this was developed on (likely the first PCB revision). The restore stub was tested on 2026-11-03 and the board stays dead, because the only stock firmware available for download (release 1.7.141) is built for a different hardware revision and does not run on this board, and the matching factory build is locked in the read-protected stock bootloader. A working image would have to come from Binepad. Details in [docs/bnk16/HARDWARE.md](docs/bnk16/HARDWARE.md#going-back-to-stock) and [docs/bnk16/PROJECT_NOTES.md](docs/bnk16/PROJECT_NOTES.md). The board itself is never at risk: our Vial firmware always reflashes via `wchisp`.
-
-## Use
-
-Plug the board in and open the Vial app or <https://vial.rocks>. It is detected as `5650:0b16` ("Vialpad BNK16"). On Linux you need the [udev rule from the Vial docs](https://get.vial.today/manual/linux-udev.html).
-
-Default keymap:
-
-| Control | Default |
-|---|---|
-| Keys | Numpad on layer 0; Bluetooth devices 1-3 in the top row of layer 3; all other keys on layers 1-3 are `KC_NO`, encoders stay transparent |
-| Small left encoder | Volume, click = Mute |
-| Small right encoder | Page up/down, click = Play/Pause |
-| Big knob | Mouse wheel (no click switch) |
-| 4-position switch | Selects layer 0-3 |
-
-The switch contacts are matrix (0,4) and (1,4). They are hidden in Vial and always `KC_NO`.
-
-## Change the firmware
-
-Everything specific to this board is in [firmware/ch585_v2/qmk_porting/keyboards/bnk16/](firmware/ch585_v2/qmk_porting/keyboards/bnk16/):
-
-| File | Content |
-|---|---|
-| `qmk_config.h` | Pins, encoders, RGB, Vial options |
-| `rules.cmake` | Hardware and base settings |
-| `keymaps/vial/rules.cmake` | Feature switches |
-| `bnk16.c` | Layer switch, big knob filter, status LED, USB/BLE mode handling, `main()` |
-| `keymaps/vial/keymap.c` | Default keymap, custom keycodes |
-| `vial.json` | Layout shown in Vial, custom keycodes (haptics settings are on the User tab, saved on the board) |
-| `bnk16_diag.c` | Diagnostic builds, see below |
-
-### Diagnostic builds
-
-There is no automated test suite: the firmware is tested on the board. To find pins that are still unknown (battery, VBUS, haptics), uncomment one of these in `qmk_config.h` and rebuild:
-
-| Define | What it does |
-|---|---|
-| `BNK16_SWITCH_PROBE` | From 5 s after boot, types one line per pin state change |
-| `BNK16_PIN_SCAN` | From 20 s after boot, drives each free pin high then low and types its name |
-
-Both type over USB by themselves, so focus an empty text editor first, and do not use them for normal work. Older probes that have served their purpose (click and encoder debugging) are in the Git history, in commit `36851df`.
+If you change `keymap.c`, keep the order of the custom keycodes in sync with `customKeycodes` in `vial.json`.
 
 ## Versions
 
@@ -119,21 +125,8 @@ Both type over USB by themselves, so focus an empty text editor first, and do no
 | WCH BLE library | `CH585_BLE_LIB_V1.5.0729`, closed source |
 | Toolchain | WCH GCC 12.2 in `nookcraftlab/riscv:latest` |
 
-## Repository layout and upstream
-
-```
-firmware/ch585_v2/
-  build-bnk16.sh                  build entry point
-  qmk_firmware/                   submodule: QMK with Vial, unmodified
-  qmk_porting/keyboards/bnk16/    board target
-  qmk_porting/drivers/ws2812/     WS2812 driver (changed)
-  qmk_porting/protocol/           USB report sending (changed)
-  user/usb/                       USB descriptors and driver (changed)
-docs/bnk16/                       pin map, upstreaming plan
-```
-
-The `upstream` remote is NookCraftLab's repository. Which change could go back there is listed in [docs/bnk16/UPSTREAMING.md](docs/bnk16/UPSTREAMING.md).
-
 ## License
 
-GPLv3, see [LICENSE](LICENSE). `libCH58xBLE.a` is WCH's closed-source library, see [docs/LICENSE_NOTICE.md](docs/LICENSE_NOTICE.md).
+GPLv3, see [LICENSE](LICENSE), same as QMK and the upstream port.
+
+The exception is `libCH58xBLE.a`, WCH's Bluetooth library, which is closed source and only shipped as a binary. See [docs/LICENSE_NOTICE.md](docs/LICENSE_NOTICE.md).
