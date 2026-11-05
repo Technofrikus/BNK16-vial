@@ -335,7 +335,7 @@ const uint8_t MyProdInfo[ ]  =
 /* Serial Number Information (Vial magic: vial:f64c2b3c) */
 const uint8_t  MySerNumInfo[ ] =
 {
-    0x1E,
+    0x1C, /* 2 + 13 characters * 2; was 0x1E, which made hosts read 2 bytes past the end */
     0x03,
     'v', 0, 'i', 0, 'a', 0, 'l', 0, ':', 0,
     'f', 0, '6', 0, '4', 0, 'c', 0, '2', 0,
