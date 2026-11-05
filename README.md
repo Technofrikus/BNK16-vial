@@ -84,7 +84,9 @@ The same steps also work as a recovery if anything ever goes wrong. Don't run `w
 3. Copy `bnk16-vX.Y.Z.uf2` from the Releases onto it. On macOS, drag it in Finder; `cp` in the Terminal sometimes fails on UF2 drives.
 4. The board restarts with the new firmware by itself. Your computer may complain that the drive was not ejected properly; that is normal.
 
-If a copy gets interrupted, nothing is lost: the board simply comes up as BNK16BOOT again and you copy the file once more. UF2 files for other boards, including Binepad's own stock updates, are ignored.
+If a copy gets interrupted, nothing is lost: the board simply comes up as BNK16BOOT again and you copy the file once more. UF2 files for other boards are ignored.
+
+**Going back to stock:** the bootloader also accepts Binepad's own stock UF2 updates and starts them. Binepad's signature is not checked. This only helps with a stock UF2 that matches your PCB revision; the public 1.7.141 release does not run on at least some boards (see the warning at the top). If the stock firmware doesn't work, hold the top-left key while plugging in to get BNK16BOOT back, then copy our UF2 again. Stock's own update-mode key also leads back to BNK16BOOT. Expect the stored settings to reset when switching between the two.
 
 ## Building and changing the defaults
 

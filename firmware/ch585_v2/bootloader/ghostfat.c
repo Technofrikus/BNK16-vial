@@ -5,9 +5,12 @@
  * and writes are only looked at for UF2 blocks. Each UF2 block carries its own flash address, so it does
  * not matter where the host puts the file on the "disk".
  *
- * Safe against interrupted updates: the first flash page of the firmware (its reset jump) is erased
- * by the first accepted block and written back only after all blocks of the file have arrived. Until
- * then the bootloader sees no firmware and stays in update mode on the next reset.
+ * Safe against interrupted updates: the first flash page of the firmware (its reset jump, or the MCUboot
+ * header of a stock image) is erased by the first accepted block and written back only after all blocks
+ * of the file have arrived. Until then the bootloader sees no firmware and stays in update mode.
+ *
+ * Two kinds of UF2 are accepted: ours (family BL_UF2_FAMILY, firmware at APP_START) and Binepad's stock
+ * updates (family 0x1aa143c7, MCUboot image at 0x18000). Nothing below APP_START is ever written.
  */
 
 #include <string.h>
@@ -36,6 +39,7 @@ static const char info_txt[] =
     "Board-ID: CH585-BNK16\r\n"
     "\r\n"
     "Copy a bnk16-*.uf2 file onto this drive to update the firmware.\r\n"
+    "Binepad stock UF2 files are accepted too (not signature-checked).\r\n"
     "The board restarts by itself when the copy is done.\r\n";
 
 static const char index_htm[] =
@@ -164,6 +168,8 @@ static struct {
     bool done;
     bool failed;
     uint32_t num_blocks;
+    uint32_t family;
+    uint32_t image_start;                      /* page written last */
     uint32_t received;
     uint8_t seen[(MAX_BLOCKS + 7) / 8];
     uint8_t erased[(APP_ERASE_BLOCKS + 7) / 8];
@@ -208,8 +214,18 @@ static void handle_uf2_block(const uf2_block_t *b)
     if (b->flags & UF2_FLAG_NOFLASH) {
         return;
     }
-    if (!(b->flags & UF2_FLAG_FAMILY_ID) || b->family_id != UF2_FAMILY) {
-        return;                                /* not for this board, e.g. a Binepad stock UF2 */
+    if (!(b->flags & UF2_FLAG_FAMILY_ID)) {
+        return;
+    }
+    /* Each image has a start page that is written last, so a half-written image never boots:
+     * ours starts at APP_START, Binepad's stock image with its MCUboot header at STOCK_SLOT. */
+    uint32_t image_start;
+    if (b->family_id == UF2_FAMILY) {
+        image_start = APP_START;
+    } else if (b->family_id == STOCK_UF2_FAMILY) {
+        image_start = STOCK_SLOT;
+    } else {
+        return;                                /* not for this board */
     }
     if (b->payload_size != FLASH_PAGE || (b->target_addr % FLASH_PAGE) != 0 ||
         b->target_addr < APP_START || b->target_addr + FLASH_PAGE > FLASH_END) {
@@ -222,12 +238,15 @@ static void handle_uf2_block(const uf2_block_t *b)
         return;
     }
 
-    if (!st.active || b->num_blocks != st.num_blocks) {
-        /* new update: invalidate the current firmware right away */
+    if (!st.active || b->num_blocks != st.num_blocks || b->family_id != st.family) {
+        /* new update: invalidate both firmware kinds right away. Ours is checked first at boot, so a
+         * stock image only boots once our start page is gone. */
         memset(&st, 0, sizeof(st));
         st.active = true;
         st.num_blocks = b->num_blocks;
-        if (!ensure_erased(APP_START)) {
+        st.family = b->family_id;
+        st.image_start = image_start;
+        if (!ensure_erased(APP_START) || !ensure_erased(STOCK_SLOT)) {
             st.failed = true;
             return;
         }
@@ -240,7 +259,7 @@ static void handle_uf2_block(const uf2_block_t *b)
         return;
     }
 
-    if (b->target_addr == APP_START) {
+    if (b->target_addr == st.image_start) {
         memcpy(st.first_page, b->data, FLASH_PAGE);
         st.first_page_held = true;
     } else if (!flash_page(b->target_addr, b->data)) {
@@ -253,7 +272,7 @@ static void handle_uf2_block(const uf2_block_t *b)
 
     if (st.received == st.num_blocks) {
         /* everything is in: writing the first page makes the firmware bootable */
-        if (!st.first_page_held || !flash_page(APP_START, st.first_page)) {
+        if (!st.first_page_held || !flash_page(st.image_start, st.first_page)) {
             st.failed = true;
             return;
         }

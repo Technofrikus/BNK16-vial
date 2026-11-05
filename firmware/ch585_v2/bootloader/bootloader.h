@@ -8,6 +8,13 @@
 #define FLASH_END   ((uint32_t)(BL_FLASH_SIZE))
 #define UF2_FAMILY  ((uint32_t)(BL_UF2_FAMILY))
 
+/* Binepad stock firmware, as its UF2 updates lay it out: an MCUboot image in the primary slot at
+ * 0x18000 (header magic, header size at offset 8), code right after the header (0x19000). It is booted
+ * without checking Binepad's signature. */
+#define STOCK_UF2_FAMILY   0x1AA143C7u
+#define STOCK_SLOT         0x18000u
+#define STOCK_IMAGE_MAGIC  0x96F3B83Du
+
 #define FLASH_PAGE   256u   /* write unit, and the UF2 payload size we accept */
 #define FLASH_BLOCK  4096u  /* erase unit */
 

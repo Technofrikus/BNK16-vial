@@ -6,7 +6,10 @@
  *   - firmware asked for it (R8_GLOB_RESET_KEEP == 5, set by QK_BOOT / bootloader_jump()) -> bootloader
  *   - no valid firmware (first word erased)                                              -> bootloader
  *   - power-on reset while the top-left key is held                                      -> bootloader
- *   - otherwise                                                                          -> jump to the firmware
+ *   - otherwise                                     -> jump to our firmware, or to a Binepad stock image
+ *
+ * The stock firmware uses the same reset-keep value for its own "update mode" key, so from stock the
+ * update key also lands here.
  *
  * The bootloader shows up as a USB drive "BNK16BOOT". Copying a .uf2 onto it writes the firmware
  * and reboots into it. The ROM ISP bootloader (BOOT key + wchisp) stays untouched as the last resort.
@@ -19,10 +22,27 @@
 #define KEY_ROW_PIN (1u << 3)
 #define KEY_COL_PIN (1u << 5)
 
-static bool app_present(void)
+static bool word_programmed(uint32_t addr)
 {
-    uint32_t first = *(volatile const uint32_t *)APP_START;
-    return first != 0xFFFFFFFFu && first != 0x00000000u;
+    uint32_t w = *(volatile const uint32_t *)addr;
+    return w != 0xFFFFFFFFu && w != 0x00000000u;
+}
+
+/* Where to start the firmware, 0 if there is none. Ours wins; a Binepad stock image is only started
+ * when ours is absent (every update erases both start pages first, so only one of them is valid). */
+static uint32_t firmware_entry(void)
+{
+    if (word_programmed(APP_START)) {
+        return APP_START;
+    }
+    if (*(volatile const uint32_t *)STOCK_SLOT == STOCK_IMAGE_MAGIC) {
+        uint32_t hdr_size = *(volatile const uint16_t *)(STOCK_SLOT + 8);
+        uint32_t entry = STOCK_SLOT + hdr_size;
+        if (hdr_size >= 32 && hdr_size <= 0x1000 && (hdr_size % 4) == 0 && word_programmed(entry)) {
+            return entry;
+        }
+    }
+    return 0;
 }
 
 static bool boot_key_held(void)
@@ -61,12 +81,13 @@ static bool reset_was_power_on(void)
     }
 }
 
-__attribute__((noreturn)) static void jump_to_app(void)
+__attribute__((noreturn)) static void jump_to(uint32_t entry)
 {
     /* Nothing was set up besides the two GPIOs (restored above), no interrupt is enabled. The firmware's
-     * own startup sets gp, sp, the clock, the RAM vector table and mtvec again. */
+     * own startup sets gp, sp, the clock, the RAM vector table and mtvec again (checked for both ours
+     * and the stock 1.7.141 image). */
     __asm__ volatile("csrci mstatus, 0x8");
-    ((void (*)(void))APP_START)();
+    ((void (*)(void))entry)();
     __builtin_unreachable();
 }
 
@@ -79,14 +100,15 @@ int main(void)
     }
     R8_GLOB_RESET_KEEP = 0;
 
-    if (!app_present()) {
+    uint32_t entry = firmware_entry();
+    if (entry == 0) {
         enter = true;
     }
     if (!enter && reset_was_power_on()) {
         enter = boot_key_held();
     }
     if (!enter) {
-        jump_to_app();
+        jump_to(entry);
     }
 
     /* USB high-speed needs the HSE PLL clock, same as the firmware */

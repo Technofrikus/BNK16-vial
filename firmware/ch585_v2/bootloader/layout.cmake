@@ -11,8 +11,8 @@ set(BNK16_BOOTLOADER_SIZE 0x08000)
 set(BNK16_APP_START       0x08000)
 math(EXPR BNK16_APP_SIZE "${BNK16_FLASH_SIZE} - ${BNK16_APP_START}" OUTPUT_FORMAT HEXADECIMAL)
 
-# Our own UF2 family ID. Deliberately not Binepad's 0x1aa143c7, so a stock UF2 (built for a
-# different PCB revision and a different layout) is ignored instead of being flashed.
+# Our own UF2 family ID. Binepad's stock UF2s (0x1aa143c7, MCUboot image at 0x18000) are accepted too,
+# see STOCK_* in bootloader.h; the family tells the bootloader which layout a file uses.
 set(BNK16_UF2_FAMILY 0x6B16C585)
 
 # Write a copy of the SDK linker script with the FLASH region moved to the given origin and length.
