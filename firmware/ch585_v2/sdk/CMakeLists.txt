@@ -71,8 +71,18 @@ target_sources(CH582_IAP INTERFACE
     "${CMAKE_CURRENT_LIST_DIR}/Startup/startup_CH585.S"
 )
 
+if(UF2_BOOTLOADER)
+    # Firmware linked behind the UF2 bootloader: same script, FLASH region moved
+    include(${CMAKE_CURRENT_LIST_DIR}/../bootloader/layout.cmake)
+    set(APP_LINKER_SCRIPT ${PROJECT_BINARY_DIR}/Link_APP_uf2.ld)
+    bnk16_make_linker_script(${APP_LINKER_SCRIPT} ${BNK16_APP_START} ${BNK16_APP_SIZE})
+    message(STATUS "UF2 bootloader layout: firmware at ${BNK16_APP_START}, ${BNK16_APP_SIZE} bytes")
+else()
+    set(APP_LINKER_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/Ld/Link_APP.ld)
+endif()
+
 target_link_options(CH582_APP INTERFACE
-    -T ${CMAKE_CURRENT_LIST_DIR}/Ld/Link_APP.ld
+    -T ${APP_LINKER_SCRIPT}
 )
 target_link_options(CH582_IAP INTERFACE
     -T ${CMAKE_CURRENT_LIST_DIR}/Ld/Link_IAP.ld

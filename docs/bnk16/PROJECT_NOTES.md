@@ -394,15 +394,15 @@ Battery work belongs next to this. `battery.c` returns a simulated value. To mea
 - Whether it charges in the USB switch position (the switch cuts battery +), battery capacity, and current in each state.
 
 ### Phase 5: Comfort extras (optional)
-1. UF2 bootloader: port O-H-M2's MCUboot+UF2 to CH585 using the stock layout (`0x18000`, header `0x1000`), validating SHA256 only and no signature. The app is then linked at `0x19000` and signed with `imgtool` without a key. In theory it could also boot the stock signed UF2. Untested.
-2. Use QMK's `QK_BOOT` for the jump to the bootloader, so updates no longer need PB22.
+1. ~~UF2 bootloader~~ Implemented 2026-11-05 in `firmware/ch585_v2/bootloader/`, **not yet tested on the board**. Instead of porting MCUboot it is a small own bootloader (~7.5 KB): bootloader at `0x0000` (32 KB reserved), firmware at `0x8000`, layout in `bootloader/layout.cmake`. USB mass storage on the HS port, polled, no interrupts; virtual FAT16 drive `BNK16BOOT`; accepts only UF2 blocks with our own family ID `0x6B16C585` (Binepad's `0x1aa143c7` is rejected on purpose) and only addresses `>= 0x8000`. No signing. The firmware's first flash page is erased first and written last, so an interrupted copy leaves no bootable firmware and the board stays in the bootloader. Entry: `R8_GLOB_RESET_KEEP == 5` (what `bootloader_jump()` already sets), no valid firmware, or the top-left key held at a real power-on (skipped after software, watchdog and shutdown-wake resets, so waking the board with that key does not enter it). The FAT/UF2 logic was host-tested against a fake flash (in order, reversed, half, duplicates, wrong family) and the drive image passes `fsck_msdos`; the USB part needs the board. QMK bootmagic is now off for `bnk16` (it would wipe the settings).
+2. ~~Use QMK's `QK_BOOT` for the jump to the bootloader~~ Works through the existing `bootloader_jump()` (sets reset-keep 5 and resets), untested on the board.
 3. Contribute the `bnk16` target upstream to NookCraftLab.
 
 ### Risks
 - ch585-qmk-vial is young; expect to fix things in the port itself (USBHS, WS2812, flash storage).
 - ~~The RGB driver might be missing on CH585~~ Resolved: the port's PWM driver needed fixes, now works.
 - Only matrix, encoder, PA10 and PA11 pins are confirmed. Every other pin from the stock-code reading (switch, VBUS, battery, layer switch) is unverified and partly proven wrong; measure before wiring them in. The pin-scan trick (below) is a cheap way to find output pins.
-- The stock bootloader is gone; the way back is the untested stub image (section 7). ISP via PB22 always works.
+- The stock bootloader is gone; the way back is the untested stub image (section 7). ISP via PB22 always works, and re-flashing `bnk16_full.bin` restores our UF2 bootloader too.
 - The closed WCH BLE library limits debugging of wireless problems.
 - Fallback if the port fails completely: a minimal own firmware on the WCH SDK HID example (fixed keymap), or the stub restore.
 

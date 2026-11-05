@@ -40,4 +40,4 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 
 A working stock image for the exact hardware revision would have to come from Binepad support. The official (but mismatched) release is published in [binepad/binepad-updates](https://github.com/binepad/binepad-updates). The stock images and the EEPROM dump are kept out of this repository because the dump contains BLE bonding keys. Details in [PROJECT_NOTES.md](PROJECT_NOTES.md) ("Stub restore analysis" and section 7).
 
-Our Vial firmware is the firmware for this board and is always recoverable: hold BOOT (PB22) while plugging in and `wchisp flash <build>.bin`.
+Our Vial firmware is the firmware for this board and is always recoverable: hold BOOT (PB22) while plugging in and `wchisp flash bnk16_full.bin` (UF2 bootloader + firmware).

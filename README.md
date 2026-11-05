@@ -51,23 +51,40 @@ To pair a device, switch to layer 3 and hold BT1, BT2 or BT3 for 3 seconds. Tap 
 
 Vial is locked by default for the risky stuff (matrix tester, macros, bootloader key). To unlock, hold the top-left and top-right key when Vial asks.
 
+Holding the top-left key while plugging in starts the update mode (see [Updates](#updates-drag-and-drop)), so don't hold it when you plug in for normal use.
+
 ## Flashing
 
-You flash with **wchisp**, a small command line tool for WCH chips. Get it from the [wchisp releases page](https://github.com/ch32-rs/wchisp/releases/tag/nightly) (there are builds for macOS, Linux and Windows). On Windows you might also need the Visual C++ runtime.
+The firmware comes with its own small bootloader. You install both once with `wchisp`. After that, updating means dragging a file onto a USB drive.
 
-1. Get `bnk16.bin`, either from this repo's Releases or by building it yourself (see below).
+Before any update, save your layout in Vial (File → Save current layout). A new build can reset the keymap stored on the board, so you can load it again afterwards.
+
+### First install (once, with wchisp)
+
+**wchisp** is a small command line tool for WCH chips. Get it from the [wchisp releases page](https://github.com/ch32-rs/wchisp/releases/tag/nightly) (there are builds for macOS, Linux and Windows). On Windows you might also need the Visual C++ runtime.
+
+1. Get `bnk16-vX.Y.Z-full.bin` from this repo's Releases. If you build it yourself, it is `bnk16_full.bin` (see below).
 2. Hold the BOOT key on the PCB while plugging in the USB cable. The board is now in ISP mode.
 3. Flash right away, ISP mode times out quickly:
 
 ```bash
-wchisp flash bnk16.bin
+wchisp flash bnk16-v1.0.0-full.bin
 ```
 
 4. Replug the board, open the Vial app or <https://vial.rocks>, and it should show up as "Vialpad BNK16". On Linux you need the [udev rule from the Vial docs](https://get.vial.today/manual/linux-udev.html).
 
-A new build resets the keymap stored on the board, so save your layout in Vial first (File → Save current layout) and load it again afterwards.
+The same steps also work as a recovery if anything ever goes wrong. Don't run `wchisp config` unless you know why, it can erase the whole chip.
 
-Don't run `wchisp config` unless you know why, it can erase the whole chip.
+### Updates (drag and drop)
+
+1. Start the bootloader, one of these ways:
+   - Slide the switch to USB, unplug the board, **hold the top-left key** and plug it back in.
+   - Press a key that has `QK_BOOT` assigned in Vial. Vial must be unlocked to assign it.
+2. A drive called **BNK16BOOT** appears.
+3. Copy `bnk16-vX.Y.Z.uf2` from the Releases onto it. On macOS, drag it in Finder; `cp` in the Terminal sometimes fails on UF2 drives.
+4. The board restarts with the new firmware by itself. Your computer may complain that the drive was not ejected properly; that is normal.
+
+If a copy gets interrupted, nothing is lost: the board simply comes up as BNK16BOOT again and you copy the file once more. UF2 files for other boards, including Binepad's own stock updates, are ignored.
 
 ## Building and changing the defaults
 
@@ -87,7 +104,9 @@ cd BNK16-vial
 docker run --rm --platform linux/amd64 -v "$PWD:/workspace" nookcraftlab/riscv:latest bash /workspace/firmware/ch585_v2/build-bnk16.sh
 ```
 
-The firmware ends up in `firmware/ch585_v2/build-bnk16/bnk16.bin`. On Windows PowerShell use `${PWD}` instead of `$PWD`.
+Everything ends up in `firmware/ch585_v2/build-bnk16/`: `bnk16.uf2` for drag-and-drop updates and `bnk16_full.bin` (bootloader + firmware) for `wchisp`. On Windows PowerShell use `${PWD}` instead of `$PWD`.
+
+How releases are made is in [RELEASE.md](RELEASE.md).
 
 ### Where things are
 
@@ -107,6 +126,7 @@ The rest of the repo:
 ```
 firmware/ch585_v2/
   build-bnk16.sh          build script
+  bootloader/             UF2 bootloader and flash layout (layout.cmake)
   qmk_firmware/           QMK with Vial (submodule, unmodified)
   qmk_porting/            the CH585 port: board targets, drivers, Bluetooth
   user/usb/               USB descriptors and driver

@@ -5,7 +5,12 @@ set(ENCODER_ENABLE ON CACHE BOOL "KB" FORCE)
 set(ENCODER_MAP_ENABLE ON CACHE BOOL "KB" FORCE)
 set(VIA_ENABLE ON CACHE BOOL "KB" FORCE)
 set(VIAL_ENABLE ON CACHE BOOL "KB" FORCE)
-set(BOOTMAGIC_ENABLE ON CACHE BOOL "KB" FORCE)
+# Off: the UF2 bootloader checks the top-left key itself. QMK's bootmagic would also wipe the stored
+# settings, and it could fire when the board is woken from shutdown with that key.
+set(BOOTMAGIC_ENABLE OFF CACHE BOOL "KB" FORCE)
+
+# The firmware runs behind the UF2 bootloader (firmware/ch585_v2/bootloader, layout in layout.cmake)
+set(UF2_BOOTLOADER ON CACHE BOOL "KB" FORCE)
 set(GRAVE_ESC_ENABLE OFF CACHE BOOL "KB" FORCE)
 set(COMMAND_ENABLE OFF CACHE BOOL "KB" FORCE)
 set(MACRO_ENABLE ON CACHE BOOL "KB" FORCE)
