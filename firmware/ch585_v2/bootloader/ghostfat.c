@@ -331,8 +331,9 @@ static bool handle_uf2_block(const uf2_block_t *b)
     } else {
         return true;                           /* not for this board */
     }
+    /* written as FLASH_END - FLASH_PAGE so that a huge target_addr cannot wrap around the check */
     if (b->payload_size != FLASH_PAGE || (b->target_addr % FLASH_PAGE) != 0 ||
-        b->target_addr < APP_START || b->target_addr + FLASH_PAGE > FLASH_END) {
+        b->target_addr < image_start || b->target_addr > FLASH_END - FLASH_PAGE) {
         return true;                           /* never touch the bootloader itself */
     }
     if (b->num_blocks == 0 || b->num_blocks > MAX_BLOCKS || b->block_no >= b->num_blocks) {
@@ -344,6 +345,9 @@ static bool handle_uf2_block(const uf2_block_t *b)
 
     bool fresh = !st.active || b->num_blocks != st.num_blocks || b->family_id != st.family;
 
+    if (!fresh && st.failed && b->block_no == 0) {
+        fresh = true;                          /* a failed update is retried from block 0, without replugging */
+    }
     if (!fresh && bit_get(st.seen, b->block_no)) {
         /* a retry of a block we have (same content), or a different file with the same size and
          * family (different content): that one must not be merged into the update in progress */
@@ -356,14 +360,17 @@ static bool handle_uf2_block(const uf2_block_t *b)
         if (same) {
             return !st.failed;
         }
-        fresh = true;
-    }
-    if (!fresh && st.failed) {
-        /* a failed update can be retried without replugging: block 0 starts it over */
-        if (b->block_no != 0) {
+        if (b->block_no == 0) {
+            fresh = true;                      /* a new file starts */
+        } else {
+            /* Block 0 of the new file was taken for a retry, so the update in progress is a mix of two
+             * files. Restarting here would lose block 0 for good: fail, the host copies the file again. */
+            st.failed = true;
             return false;
         }
-        fresh = true;
+    }
+    if (!fresh && st.failed) {
+        return false;                          /* only block 0 restarts a failed update */
     }
 
     if (fresh) {
