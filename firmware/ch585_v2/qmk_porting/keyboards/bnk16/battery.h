@@ -22,7 +22,7 @@
 
 void     battery_init(void);
 uint8_t  battery_get_level(void);       /* 0-100 %, 100 while charging */
-uint16_t battery_get_voltage_mv(void);  /* smoothed battery voltage */
+uint16_t battery_get_voltage_mv(void);  /* smoothed battery voltage as measured, LED load included */
 bool     battery_is_critical(void);     /* below BATTERY_SHUTDOWN_VOLTAGE_MV */
 bool     battery_is_charging(void);     /* at the charging level and not falling */
 

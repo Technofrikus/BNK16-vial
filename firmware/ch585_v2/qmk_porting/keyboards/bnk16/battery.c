@@ -9,17 +9,33 @@
  *
  * There is no charger status or VBUS pin: while charging PA6 sits at the charger's 4.2 V, so the level
  * shows 100 % and only means something on battery, and that 4.2 V is the only sign of a cable.
+ *
+ * Two voltages are kept. battery_mv is what the cell really has at its terminals, smoothed: it decides
+ * the shutdown and the charging state. battery_est_x16 is the same without the LED load and decides the
+ * level: the LEDs pull the cell down by some 10 mV to over 100 mV, which is 5 % and more on the flat
+ * middle of the curve, so the level would fall whenever they light up and climb back in sleep.
  */
 
 #include "battery.h"
 #include "quantum.h"
 #include "CH58x_common.h"
+#include "ws2812_supplement.h"
 
 #define BATTERY_AIN                 10    /* PA6 */
 #define BATTERY_CAL_GAIN_X10000     19844 /* battery mV per PA6 mV, x 10000 */
 #define BATTERY_CAL_OFFSET_MV       25
 #define BATTERY_MEASURE_INTERVAL_MS 10000
 #define BATTERY_SAMPLES             16
+/* After the LEDs came on the cell keeps sinking for a while, and after they went off it recovers. In that
+ * time a change in the reading is the load's doing, not the charge's: the estimate is held. With the LEDs
+ * on, the gap to the reading is learned as the sag of this load; a minute of real discharge is nothing. */
+#define BATTERY_LOAD_SETTLE_MS      60000
+#define BATTERY_REST_SETTLE_MS      20000
+#define BATTERY_SAG_MAX_MV          200   /* more than the LEDs can cause: something else changed, e.g. the cable */
+/* The level follows a fall of this many percent and a rise of that many: on battery it should only fall,
+ * a rise is the cell recovering (small) or the charger (large) */
+#define BATTERY_LEVEL_FALL_STEP     2
+#define BATTERY_LEVEL_RISE_STEP     4
 
 /* Battery mV to percent, a common LiPo curve at light load; linear in between */
 static const struct {
@@ -33,6 +49,10 @@ static const struct {
 };
 
 static uint16_t battery_mv;    /* smoothed, 0 = not measured yet */
+static uint32_t battery_est_x16;      /* smoothed voltage without the LED load, in 1/16 mV */
+static uint16_t battery_sag_mv;       /* how far the LEDs pull the reading down, learned as they come on */
+static bool     battery_loaded;       /* LED supply on */
+static uint32_t battery_load_change;  /* when battery_loaded last changed */
 static uint8_t  battery_level = 100;
 static uint32_t battery_last_measure;
 static uint8_t  battery_measurements; /* up to BATTERY_CRITICAL_MIN_MEASUREMENTS */
@@ -72,10 +92,35 @@ static uint8_t battery_mv_to_percent(uint16_t mv)
     return 0;
 }
 
-/* Measures every BATTERY_MEASURE_INTERVAL_MS, cheap to call more often. The voltage is smoothed (LED load
- * and radio bursts), and the level moves only by 2 % or more, or to 0/100, so it does not flicker. */
+/* The voltage the cell would have without the LEDs, from a reading with or without them */
+static void battery_estimate(uint16_t mv)
+{
+    if (!battery_est_x16) {
+        battery_est_x16 = (uint32_t)mv << 4;
+        return;
+    }
+    if (timer_elapsed32(battery_load_change) < (battery_loaded ? BATTERY_LOAD_SETTLE_MS : BATTERY_REST_SETTLE_MS)) {
+        if (battery_loaded) {
+            int sag        = (int)(battery_est_x16 >> 4) - mv;
+            battery_sag_mv = sag < 0 ? 0 : sag > BATTERY_SAG_MAX_MV ? BATTERY_SAG_MAX_MV : sag;
+        }
+        return;
+    }
+    int32_t target = (int32_t)(mv + (battery_loaded ? battery_sag_mv : 0)) << 4;
+    battery_est_x16 += (target - (int32_t)battery_est_x16) / 4;
+}
+
+/* Measures every BATTERY_MEASURE_INTERVAL_MS, cheap to call more often (the main loop does, through
+ * power_task(), so a change of the LED supply is seen at once). Both voltages are smoothed (radio bursts,
+ * haptics); the level comes from the one without the LED load and moves in steps, so it does not flicker. */
 static void battery_update(void)
 {
+    bool loaded = ws2812_power_get();
+    if (loaded != battery_loaded) {
+        battery_loaded      = loaded;
+        battery_load_change = timer_read32();
+    }
+
     if (battery_mv && timer_elapsed32(battery_last_measure) < BATTERY_MEASURE_INTERVAL_MS) {
         return;
     }
@@ -92,9 +137,12 @@ static void battery_update(void)
         battery_measurements++;
     }
 
-    uint8_t percent = battery_mv_to_percent(battery_mv);
+    bool first = !battery_est_x16;
+    battery_estimate(mv);
+
+    uint8_t percent = battery_mv_to_percent((battery_est_x16 + 8) >> 4);
     int     diff    = (int)percent - battery_level;
-    if (diff >= 2 || diff <= -2 || percent == 0 || percent == 100) {
+    if (first || diff <= -BATTERY_LEVEL_FALL_STEP || diff >= BATTERY_LEVEL_RISE_STEP || (diff && (percent == 0 || percent == 100))) {
         battery_level = percent;
     }
 }
