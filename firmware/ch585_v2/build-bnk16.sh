@@ -7,6 +7,9 @@
 #   bnk16_full.bin         bootloader + firmware, for wchisp
 #   bnk16.bin/.hex/.elf    firmware only (linked at 0x8000)
 #   bnk16_bootloader.bin   bootloader only
+# Test build with 30 s idle stages: add -e BNK16_TEST_TIMERS=1 to the docker run call.
+# Extra compiler defines for test variants: -e BNK16_DEFS="-DFOO -DBAR=0" (see rules.cmake).
+# Another BLE library (folder with libCH58xBLE.a and its headers): -e BNK16_BLE_LIB_DIR=/workspace/...
 set -e
 git config --global --add safe.directory '*'
 GCC_PATH="/opt/Toolchain/RISC-V Embedded GCC12/bin"
@@ -25,7 +28,9 @@ echo "=== firmware"
 cd "$OUT"
 cmake .. -G Ninja -Dkeyboard=bnk16 -Dkeymap=vial \
     -DTOOLCHAIN_PREFIX=riscv-wch-elf -DADDITIONAL_TOOLCHAIN_PATH="$GCC_PATH/" \
-    -DCMAKE_BUILD_TYPE=Release
+    -DCMAKE_BUILD_TYPE=Release -DBNK16_TEST_TIMERS="${BNK16_TEST_TIMERS:-0}" \
+    -DBNK16_DEFS="${BNK16_DEFS:-}" \
+    -DBNK16_BLE_LIB_DIR="${BNK16_BLE_LIB_DIR:-}"
 ninja
 
 echo "=== images"

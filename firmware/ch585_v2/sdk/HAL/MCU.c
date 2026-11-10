@@ -90,6 +90,9 @@ void CH58X_BLEInit(void)
     SysTick_Config(SysTick_LOAD_RELOAD_Msk); // 配置SysTick并打开中断
     PFIC_DisableIRQ(SysTick_IRQn);
     g_LLE_IRQLibHandlerLocation = (uint32_t)LLE_IRQLibHandler;
+#ifdef HAL_BLE_IRQ_PRIORITY
+    PFIC_SetPriority(BLEL_IRQn, 0xF0); /* as in the WCH EVT MCU.c (test B had it) */
+#endif
 
     tmos_memset(&cfg, 0, sizeof(bleConfig_t));
     cfg.MEMAddr = (uint32_t)MEM_BUF;
@@ -121,7 +124,7 @@ void CH58X_BLEInit(void)
   #endif
 #endif
 #if(defined(HAL_SLEEP)) && (HAL_SLEEP == TRUE)
-    cfg.WakeUpTime = WAKE_UP_RTC_MAX_TIME;
+    /* CH585 library: no WakeUpTime, CH58X_LowPower wakes early by itself */
     cfg.idleCB = CH58X_LowPower; // 启用睡眠
 #endif
 #if(defined(BLE_MAC)) && (BLE_MAC == TRUE)

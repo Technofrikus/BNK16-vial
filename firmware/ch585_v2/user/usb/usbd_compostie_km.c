@@ -49,6 +49,8 @@ typedef enum
  *
  * @return  none
  */
+/* BNK16: weak, TMR3 is never started here (WCH demo code); bnk16.c uses it for a test watchdog */
+__attribute__((weak))
 __INTERRUPT
 __HIGH_CODE
 void TMR3_IRQHandler( void )

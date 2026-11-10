@@ -5,6 +5,9 @@
  * 负责：协议栈初始化、GAP 事件处理、HID 报告发送、LED 状态联动。
  */
 
+#if __has_include("bnk16_fault.h")
+#include "bnk16_fault.h"
+#endif
 #include "ble_app.h"
 #include "ble_config.h"
 #include "led_indicator.h"
@@ -337,8 +340,14 @@ static hidDevCB_t ble_hid_cbs = {
  * BB_IRQHandler 启动文件里的弱定义是死循环，这里强定义覆盖，指向 BLE 协议栈库。
  * ======================================================================== */
 
-void BB_IRQHandler(void)
+/* BNK16: a real interrupt handler (mret, in RAM). It used to be a plain function that jumped to
+ * BB_IRQLibHandler, which returns with ret: had this interrupt ever fired, the return would have gone
+ * astray. WCH's examples leave it at the startup file's weak endless loop (phase 47l). */
+__INTERRUPT __HIGH_CODE void BB_IRQHandler(void)
 {
+#ifdef BNK16_FAULT_DIAG
+    BNK16_COUNT(isr_bb);
+#endif
     BB_IRQLibHandler();  /* BLE 基带中断 — 协议栈库处理 */
 }
 
@@ -523,6 +532,10 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
                 gapEstLinkReqEvent_t *event = (gapEstLinkReqEvent_t *)pEvent;
                 conn_handle = event->connectionHandle;
                 adv_active = false;
+#ifdef BNK16_FAULT_DIAG
+                ble_link_diag.connects++;
+                ble_link_diag.connect_time = timer_read32();
+#endif
 
                 /* A host connected just as the board left BT mode or changed slot: drop it */
                 if (wired_mode_active || pending_switch_device != 0 || pending_pair_device != 0) {
@@ -580,6 +593,17 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
              * 6. CONNECTED: the link dropped: reconnect to the current slot
              * SWITCHING with nothing pending, IDLE, STANDBY: nothing to do
              */
+#ifdef BNK16_FAULT_DIAG
+            if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
+                if (ble_link_diag.losses == 0) {
+                    ble_link_diag.first_reason = ((gapTerminateLinkEvent_t *)pEvent)->reason;
+                    ble_link_diag.first_time   = timer_read32();
+                }
+                ble_link_diag.losses++;
+                ble_link_diag.reason    = ((gapTerminateLinkEvent_t *)pEvent)->reason;
+                ble_link_diag.loss_time = timer_read32();
+            }
+#endif
             conn_handle = GAP_CONNHANDLE_INIT;
             conn_peer_valid = false;
             link_secure = false;
@@ -735,6 +759,12 @@ void ble_wait_ms(uint32_t ms)
     ble_pump_allowed = false;
     while (timer_elapsed32(start) < ms) {
         TMOS_SystemProcess();
+#ifdef BNK16_FAULT_DIAG
+        /* this wait is meant to block (up to BLE_SEND_WAIT_MS per report); the soft watchdog of the test
+         * builds took it for a hang (47w, 47z) */
+        extern void bnk16_wdog_feed(void);
+        bnk16_wdog_feed();
+#endif
 #ifdef RGB_MATRIX_ENABLE
         extern void rgb_matrix_task(void);
         rgb_matrix_task();
@@ -743,14 +773,53 @@ void ble_wait_ms(uint32_t ms)
     ble_pump_allowed = true;
 }
 
+#ifdef BNK16_FAULT_DIAG
+ble_send_diag_t ble_send_diag;
+uint32_t        ble_send_wait_max; /* longest wait for the stack to take a keyboard report, ms */
+ble_link_diag_t ble_link_diag;
+
+static void send_diag_try(const uint8_t *report, uint8_t status)
+{
+    if (!ble_send_diag.armed) {
+        return;
+    }
+    if (ble_send_diag.tries == 0) {
+        ble_send_diag.first_status = status;
+        ble_send_diag.key          = report[2];
+        ble_send_diag.first_time   = timer_read32();
+    }
+    ble_send_diag.tries++;
+    if (status == SUCCESS) {
+        ble_send_diag.sent    = 1;
+        ble_send_diag.sent_ms = timer_elapsed32(ble_send_diag.first_time);
+        ble_send_diag.armed   = 0;
+    }
+}
+
+/* a new report arrives while the first one still waits: it is lost */
+static void send_diag_new_report(void)
+{
+    if (ble_send_diag.armed && ble_send_diag.tries && pending_report_valid) {
+        ble_send_diag.overwritten = 1;
+        ble_send_diag.armed       = 0;
+    }
+}
+#endif
+
 static bool ble_send_report_internal(uint8_t *report)
 {
     if (current_state != BLE_STATE_CONNECTED) {
+#ifdef BNK16_FAULT_DIAG
+        send_diag_try(report, 0xEE);
+#endif
         return false;
     }
 
     uint8_t status = HidDev_Report(HID_RPT_ID_KEY_IN, HID_REPORT_TYPE_INPUT,
                                     HID_KEYBOARD_IN_RPT_LEN, report);
+#ifdef BNK16_FAULT_DIAG
+    send_diag_try(report, status);
+#endif
     return (status == SUCCESS);
 }
 
@@ -766,6 +835,9 @@ void ble_send_keyboard_report(uint8_t modifiers, uint8_t *keys)
 
     /* The stack holds only a few packets per connection event. Give it time to send them, so a macro
      * does not lose keys; a later report would overwrite the pending one. */
+#ifdef BNK16_FAULT_DIAG
+    send_diag_new_report();
+#endif
     uint32_t start = timer_read32();
     bool sent = ble_send_report_internal(report);
     while (!sent && ble_pump_allowed && current_state == BLE_STATE_CONNECTED &&
@@ -774,6 +846,11 @@ void ble_send_keyboard_report(uint8_t modifiers, uint8_t *keys)
         sent = ble_send_report_internal(report);
     }
 
+#ifdef BNK16_FAULT_DIAG
+    if (timer_elapsed32(start) > ble_send_wait_max) {
+        ble_send_wait_max = timer_elapsed32(start);
+    }
+#endif
     if (!sent) {
         /* 发送失败，保存到待重试队列（覆盖旧的，因为新报告状态最新）*/
         memcpy(pending_report, report, HID_KEYBOARD_IN_RPT_LEN);
@@ -786,6 +863,9 @@ void ble_send_keyboard_report(uint8_t modifiers, uint8_t *keys)
 void ble_send_keyboard_release(void)
 {
     uint8_t report[HID_KEYBOARD_IN_RPT_LEN] = {0};
+#ifdef BNK16_FAULT_DIAG
+    send_diag_new_report();
+#endif
     if (!ble_send_report_internal(report)) {
         memcpy(pending_report, report, HID_KEYBOARD_IN_RPT_LEN);
         pending_report_valid = true;

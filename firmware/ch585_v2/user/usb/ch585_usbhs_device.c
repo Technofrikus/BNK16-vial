@@ -13,6 +13,9 @@
 #include <ch585_usbhs_device.h>
 #include "usbd_composite_km.h"
 #include "CH58x_common.h"
+#if __has_include("bnk16_fault.h")
+#include "bnk16_fault.h"
+#endif
 
 /******************************************************************************/
 /* Variable Definition */
@@ -265,6 +268,10 @@ void USB2_DEVICE_IRQHandler( void )
 
     intflag = R8_USB2_INT_FG;
     intst = R8_USB2_INT_ST;
+#ifdef BNK16_FAULT_DIAG
+    BNK16_COUNT(isr_usb);
+    BNK16_SET(usb_flag, intflag);
+#endif
 
     if( intflag & USBHS_UDIF_TRANSFER )
     {

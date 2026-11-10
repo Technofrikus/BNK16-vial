@@ -119,8 +119,11 @@ void SetSysClock(SYS_CLKTypeDef sc)
         }
 
     }
-    /* the port added R8_SLP_POWER_CTRL |= 0x40 here (RAM low voltage retention LPM_1); no official CH585 SDK
-     * version has it, and with it the board lost power on its first real sleep (BNK16 phase 38e) */
+    /* As the WCH website EVT (the GitHub EVT lacks it). Taken out in BNK16 phase 38e as the suspected cause
+     * of a power loss in sleep, which was a crash (phase 47h). Back in for phase 47u: without it the radio
+     * heard nothing after a chip sleep (47t: every link ended with reason 0x3e), and test B on the website
+     * EVT, which has it, keeps its link. */
+    R8_SLP_POWER_CTRL |= 0x40;
     R8_SAFE_MODE_CTRL |= RB_SAFE_AUTO_EN;
     sys_safe_access_disable();
 }

@@ -21,8 +21,14 @@ message("Entering ${CMAKE_CURRENT_LIST_DIR}/CMakeLists.txt")
 add_library(CH582_APP INTERFACE)
 add_library(CH582_IAP INTERFACE)
 
+# BLE library and its headers; a test build can point this at another copy (BNK16_BLE_LIB_DIR in build-bnk16.sh)
+if(NOT BNK16_BLE_LIB_DIR)
+    set(BNK16_BLE_LIB_DIR ${CMAKE_CURRENT_LIST_DIR}/BLE_LIB)
+endif()
+message(STATUS "BLE library: ${BNK16_BLE_LIB_DIR}")
+
 target_include_directories(CH582_APP INTERFACE
-    ${CMAKE_CURRENT_LIST_DIR}/BLE_LIB
+    ${BNK16_BLE_LIB_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/HAL/include
     ${CMAKE_CURRENT_LIST_DIR}/LWNS
     ${CMAKE_CURRENT_LIST_DIR}/printf
@@ -59,6 +65,7 @@ if(BUILD_WIRELESS_LIB OR(NOT BLE_ENABLE AND NOT ESB_ENABLE))
     list(APPEND ch582_sdk_temp
         "${CMAKE_CURRENT_LIST_DIR}/HAL/MCU.c"
         "${CMAKE_CURRENT_LIST_DIR}/HAL/RTC.c"
+        "${CMAKE_CURRENT_LIST_DIR}/HAL/SLEEP.c"
     )
     target_sources(CH582_APP INTERFACE
         ${ch582_sdk_temp}
@@ -91,7 +98,7 @@ target_link_options(CH582_IAP INTERFACE
 target_link_libraries(CH582_APP INTERFACE
     ${CMAKE_CURRENT_LIST_DIR}/StdPeriphDriver/libISP585.a
     -Wl,--whole-archive
-    ${CMAKE_CURRENT_LIST_DIR}/BLE_LIB/libCH58xBLE.a
+    ${BNK16_BLE_LIB_DIR}/libCH58xBLE.a
     -Wl,--no-whole-archive
 
     # ${CMAKE_CURRENT_LIST_DIR}/USB_LIB/libRV3UFI.a

@@ -13,6 +13,9 @@
 /******************************************************************************/
 /* 头文件包含 */
 #include "HAL.h"
+#if __has_include("bnk16_fault.h")
+#include "bnk16_fault.h"
+#endif
 
 /*********************************************************************
  * CONSTANTS
@@ -35,6 +38,9 @@ volatile uint32_t RTCTigFlag;
  *
  * @return  None.
  */
+/* In RAM as in the WCH EVT: CH58X_LowPower() calls it right after the chip wakes up, before the clock and
+ * the flash are back; running it from flash there crashed the board on its first sleep (phase 47g) */
+__HIGH_CODE
 void RTC_SetTignTime(uint32_t time)
 {
     sys_safe_access_enable();
@@ -56,6 +62,9 @@ __INTERRUPT
 __HIGH_CODE
 void RTC_IRQHandler(void)
 {
+#if __has_include("bnk16_fault.h")
+    BNK16_COUNT(isr_rtc);
+#endif
     R8_RTC_FLAG_CTRL = (RB_RTC_TMR_CLR | RB_RTC_TRIG_CLR);
     RTCTigFlag = 1;
 }

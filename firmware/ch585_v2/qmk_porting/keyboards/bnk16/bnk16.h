@@ -44,6 +44,12 @@ void bnk16_toggle_show_unassigned(void);
 bool bnk16_show_unassigned(void);
 uint8_t bnk16_keycode_bt_device(uint16_t keycode);
 
-/* Shutdown, used by power_management.c */
+/* Shutdown and deep sleep, used by power_management.c (bnk16_shutdown_possible() also gates the deep sleep) */
 bool bnk16_shutdown_possible(void);
 __attribute__((noreturn)) void bnk16_shutdown(void);
+#ifdef BNK16_DEEP_SLEEP
+void bnk16_deep_sleep_enter(void);
+bool bnk16_deep_sleep_poll(void);
+bool bnk16_deep_sleep_woken(void);
+void bnk16_deep_sleep_exit(void);
+#endif

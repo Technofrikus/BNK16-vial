@@ -67,6 +67,34 @@ void ble_send_keyboard_release(void);
 /* 重试待发送的HID报告（主循环里调用）*/
 void ble_retry_pending_report(void);
 
+#ifdef BNK16_FAULT_DIAG
+/* Phase 47s: what happens to the first keyboard report after a deep sleep exit (armed by bnk16.c) */
+typedef struct {
+    uint8_t  armed;       /* waiting for / following the first report */
+    uint8_t  first_status; /* HidDev_Report() result of the first try (0xEE = not connected) */
+    uint8_t  key;         /* first key byte of that report */
+    uint8_t  sent;        /* 1 = the stack took it */
+    uint8_t  overwritten; /* 1 = a later report replaced it before the stack took it */
+    uint32_t tries;       /* tries until then */
+    uint32_t first_time;  /* timer_read32() of the first try */
+    uint32_t sent_ms;     /* ms from the first try until the stack took it */
+} ble_send_diag_t;
+extern ble_send_diag_t ble_send_diag;
+extern uint32_t        ble_send_wait_max;
+
+/* Phase 47t: is the link really kept through the deep sleep? */
+typedef struct {
+    uint32_t connects;     /* links established since boot */
+    uint32_t losses;       /* links ended since boot */
+    uint32_t reason;       /* reason of the last end (HCI code: 8 = supervision timeout, 13 = host, 16 = us) */
+    uint32_t connect_time; /* timer_read32() of the last link start */
+    uint32_t loss_time;    /* and of the last end */
+    uint32_t first_reason; /* reason of the first end since boot */
+    uint32_t first_time;   /* and its timer_read32() */
+} ble_link_diag_t;
+extern ble_link_diag_t ble_link_diag;
+#endif
+
 /* 获取当前 BLE 连接状态 */
 ble_state_t ble_get_state(void);
 
