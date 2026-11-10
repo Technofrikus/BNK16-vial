@@ -56,3 +56,8 @@ qmk.ini
 
 # Per-target build folders
 build-*/
+
+# WCH EVT fetched by tests/bletest/fetch-evt.sh
+firmware/ch585_v2/tests/bletest/evt/
+# copy of the WCH website EVT (not public on GitHub), see build-bletest.sh
+firmware/ch585_v2/tests/bletest/evt-web/
