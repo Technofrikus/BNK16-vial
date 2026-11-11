@@ -141,11 +141,5 @@
  * pin scan drives each free pin in turn, switch probe reports every pin state change. */
 // #define BNK16_PIN_SCAN
 // #define BNK16_SWITCH_PROBE
-/* Power measurements: each power stage lasts 30 s instead of minutes (or build with BNK16_TEST_TIMERS=1,
- * see rules.cmake). Deep sleep with the link kept is switched in mcuconf.h (BNK16_DEEP_SLEEP). */
-// #define BNK16_POWER_TEST
-#ifdef BNK16_POWER_TEST
-#define POWER_SLEEP_TIMEOUT_MS    (30 * 1000) /* awake -> sleep */
-#define BLE_CONN_INTERVAL_L1_TIME (30 * 1000) /* sleep 15 ms -> 100-120 ms */
-#define POWER_SHUTDOWN_TIMEOUT_MS (90 * 1000) /* -> shutdown, after the last key */
-#endif
+/* Power measurements with short idle stages: build with BNK16_TEST_TIMERS=1 (rules.cmake). Deep sleep with
+ * the link kept is switched in mcuconf.h (BNK16_DEEP_SLEEP), where the other test switches are listed too. */

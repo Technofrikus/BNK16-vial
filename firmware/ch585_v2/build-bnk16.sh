@@ -7,7 +7,7 @@
 #   bnk16_full.bin         bootloader + firmware, for wchisp
 #   bnk16.bin/.hex/.elf    firmware only (linked at 0x8000)
 #   bnk16_bootloader.bin   bootloader only
-# Test build with 30 s idle stages: add -e BNK16_TEST_TIMERS=1 to the docker run call.
+# Test build with short idle stages (15/45/90 s): add -e BNK16_TEST_TIMERS=1 to the docker run call.
 # Extra compiler defines for test variants: -e BNK16_DEFS="-DFOO -DBAR=0" (see rules.cmake).
 # Another BLE library (folder with libCH58xBLE.a and its headers): -e BNK16_BLE_LIB_DIR=/workspace/...
 set -e

@@ -2,7 +2,7 @@
 
 Read this first in a new session, then the phase 47 rows (47 to 47q) in the file table of `PROJECT_NOTES.md`, which hold every build, SHA256 and board result in detail.
 
-Repo: `/Users/tf/Nextcloud/Keyboard/BNK16/vial-build/ch585-qmk-vial`, branch `feat/official-ble-deep-sleep`, on top of `980cb67`, committed on 2026-11-10 in two commits (tests, then the deep sleep), not pushed. `README.md` and `pictures/` are the owner's own uncommitted edits. UF2s and their elfs are in `/Users/tf/Nextcloud/Keyboard/BNK16/` and `.../BNK16/elf/`.
+Repo: `/Users/tf/Nextcloud/Keyboard/BNK16/vial-build/ch585-qmk-vial`, branch `feat/official-ble-deep-sleep`, on top of `980cb67`, committed on 2026-11-10 in two commits (tests, then the deep sleep), not pushed. `README.md` and `pictures/` are the owner's own uncommitted edits. UF2s and their elfs are in `/Users/tf/Nextcloud/Keyboard/BNK16/` and `.../BNK16/elf/`; since 2026-11-11 only 46b, 48b and 48c are kept there, the other test builds are deleted (see section 8 of `PROJECT_NOTES.md`).
 
 ## Where it stands
 
@@ -31,7 +31,7 @@ Diagnostic-only lessons: the watchdog enable survives a software reset, so a wat
 - `bnk16.c` section "Deep sleep and shutdown": `sleep_pins_arm()` (shared with `bnk16_shutdown()`), `usbhs_off()`, `usbhs_on_clean()`, `bnk16_deep_sleep_enter/poll/woken/exit()`; PB11 is polled every 500 ms in deep sleep instead of being armed.
 - `power_management.c`: `hal_sleep_allowed()`, `power_deep_sleep_task()`, `power_in_deep_sleep()`; hook in `platform_run()` (`protocol/protocol_usb.c`, weak default).
 - `sdk/HAL/SLEEP.c`: `CH58X_LowPower()` from the WCH website EVT plus the veto, SLEEPDEEP clear, halt guard, breadcrumbs. `sdk/HAL/RTC.c`: `RTC_SetTignTime` in RAM. `sdk/HAL/MCU.c`: no `WakeUpTime`; optional `HAL_BLE_IRQ_PRIORITY`.
-- Diagnostics (test builds only, `BNK16_DEFS="-DBNK16_BOOT_DIAG -DBNK16_FAULT_DIAG"`): `bnk16_fault.h` (RAM block at 0x2001C000, stages, counters), own HardFault/NMI handlers, hardware and TMR3 soft watchdog armed only in deep sleep, `fault …`/`stats …`/`wake …` lines typed over BLE, boot colour of the reset cause. Also touched for them: `user/usb/ch585_usbhs_device.c` (counter), `user/usb/usbd_compostie_km.c` (demo `TMR3_IRQHandler` made weak).
+- Diagnostics (test builds only, `BNK16_DEFS="-DBNK16_BOOT_DIAG -DBNK16_FAULT_DIAG"`), since the 2026-11-11 cleanup in their own file `bnk16_sleep_diag.c`; `bnk16.c` calls them through the hooks in `bnk16_sleep_diag.h`, which are empty in a normal build: `bnk16_fault.h` (RAM block at 0x2001C000, stages, counters), own HardFault/NMI handlers, hardware and TMR3 soft watchdog armed only in deep sleep, `fault …`/`stats …`/`wake …` lines typed over BLE, boot colour of the reset cause. Also touched for them: `user/usb/ch585_usbhs_device.c` (counter), `user/usb/usbd_compostie_km.c` (demo `TMR3_IRQHandler` made weak).
 - Build switches: `BNK16_TEST_TIMERS=1`, `BNK16_DEFS`, `BNK16_BLE_LIB_DIR` (`build-bnk16.sh`); `BLETEST_EVT=web`, `BLETEST_REGDUMP`, `BLETEST_VARIANTS` (`build-bletest.sh`, test B against the website EVT copy in the git-ignored `tests/bletest/evt-web/`).
 - Build: `docker run --rm --platform linux/amd64 -e BNK16_TEST_TIMERS=1 -e BNK16_DEFS="-DBNK16_BOOT_DIAG -DBNK16_FAULT_DIAG" -v "$PWD:/workspace" nookcraftlab/riscv:latest bash /workspace/firmware/ch585_v2/build-bnk16.sh` from the repo root (start Docker Desktop first if needed). Decode addresses with `riscv-wch-elf-addr2line` from the image against the kept elf.
 
@@ -44,4 +44,4 @@ Diagnostic-only lessons: the watchdog enable survives a software reset, so a wat
 
 ## Flashing notes
 
-Flash after a power cycle (switch off/on, hold the top-left key at power-on for BNK16BOOT). Do not use the diagnostic builds with Vial writes (watchdog in deep sleep). Daily firmware to go back to: `bnk16-phase46b-web-ble.uf2`.
+Flash after a power cycle (switch off/on, hold the top-left key at power-on for BNK16BOOT). Do not use the diagnostic builds with Vial writes (watchdog in deep sleep). Daily firmware to go back to: `bnk16-phase46b-web-ble.uf2`. Newest build, not tested on the board: `bnk16-phase49-review-fixes.uf2` (cleanup and review fixes of 2026-11-11, section 8 of `PROJECT_NOTES.md`).

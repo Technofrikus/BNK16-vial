@@ -63,7 +63,7 @@ Holding the top-left key while plugging in starts the update mode (see [Updates]
 
 The firmware comes with its own small bootloader. You install both once with `wchisp`. After that, updating means dragging a file onto a USB drive (uf2 mode).
 
-Before any update, save your layout in Vial (File → Save current layout). A new build can reset the keymap stored on the board, so you can load it again afterwards.
+An update keeps the keymap, macros and settings stored on the board: they live in a separate part of the flash that flashing does not touch, and the firmware only resets them when its Vial build ID differs from the one stored there. That ID is fixed now and is only changed for a release whose stored layout would no longer fit; the release notes will say so. The first update from a build made before the ID was fixed resets the keymap once. Saving your layout in Vial before an update (File → Save current layout) is still a good habit, so you can load it again if that happens.
 
 ### First install (once, with wchisp)
 
@@ -159,10 +159,12 @@ Everything specific to the BNK16 lives in [firmware/ch585_v2/qmk_porting/keyboar
 | `keymaps/vial/keymap.c` | **The default keymap** and the custom keycodes |
 | `vial.json` | The layout Vial shows and the names of the custom keycodes |
 | `keymaps/vial/rules.cmake` | Which features are compiled in (Tap Dance, Combos, ...) |
+| `rules.cmake` | Hardware switches and `VIAL_BUILD_ID` (see below) |
 | `qmk_config.h` | Pins, encoders, RGB, Vial options, haptic defaults |
 | `bnk16.c` | Layer switch, big knob, haptics, status LED, USB/Bluetooth mode |
 | `battery.c`, `power_management.c` | Battery reading, deep sleep and shutdown |
-| `mcuconf.h` | Chip options, including the `BNK16_DEEP_SLEEP` switch |
+| `mcuconf.h` | Chip options, including the `BNK16_DEEP_SLEEP` switch and the list of test switches |
+| `bnk16_sleep_diag.c` | Deep sleep diagnostics, only compiled into test builds |
 
 The rest of the repo:
 
@@ -177,6 +179,8 @@ docs/bnk16/               pin map and development notes (deep sleep: PROJECT_NOT
 ```
 
 If you change `keymap.c`, keep the order of the custom keycodes in sync with `customKeycodes` in `vial.json`.
+
+The board only loads the default keymap from `keymap.c` when the keymap stored on it is reset. To make your build do that, count up `VIAL_BUILD_ID` in `rules.cmake` (or reset the keymap from Vial). Count it up as well whenever you change the matrix, the layout in `vial.json`, the number of layers or the Vial tap dance, combo or key override counts, because a stored keymap from before would no longer fit.
 
 ## Versions
 

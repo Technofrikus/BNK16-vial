@@ -5,6 +5,12 @@ set(ENCODER_ENABLE ON CACHE BOOL "KB" FORCE)
 set(ENCODER_MAP_ENABLE ON CACHE BOOL "KB" FORCE)
 set(VIA_ENABLE ON CACHE BOOL "KB" FORCE)
 set(VIAL_ENABLE ON CACHE BOOL "KB" FORCE)
+# Fixed Vial build ID (24 bits), so a firmware update keeps the keymap, macros and settings stored on the
+# board. VIA wipes them whenever this differs from the ID stored in the EEPROM. Count it up by hand when a
+# stored keymap must not survive: changed matrix or vial.json layout, DYNAMIC_KEYMAP_LAYER_COUNT, the
+# Vial tap dance/combo/key override counts, or a new default keymap that should replace the user's.
+# Without this line every build gets a random ID (QMK's default).
+set(VIAL_BUILD_ID 0x00B16001 CACHE STRING "KB" FORCE)
 # Off: the UF2 bootloader checks the top-left key itself. QMK's bootmagic would also wipe the stored
 # settings, and it could fire when the board is woken from shutdown with that key.
 set(BOOTMAGIC_ENABLE OFF CACHE BOOL "KB" FORCE)
@@ -36,15 +42,15 @@ add_definitions(-DUSB_PORT_CONFIG=USB_PORT_HIGH_SPEED)
 # Up to 3 key reports per BLE connection event (the SDK default is 1)
 add_definitions(-DBLE_TX_NUM_EVENT=3)
 
-# Test build only (BNK16_TEST_TIMERS=1 for build-bnk16.sh): short idle stages instead of 5/5/20 min.
-# Sleep 15 s after the last key, slow BLE interval 30 s later, shutdown 90 s after the last key.
+# Test build only (BNK16_TEST_TIMERS=1 for build-bnk16.sh): short idle stages instead of 5/10/30 min after
+# the last key. Sleep 15 s after the last key, slow BLE interval 30 s later, shutdown 90 s after the last key.
 if(BNK16_TEST_TIMERS)
     message(STATUS "BNK16: test timers (15/30/90 s)")
     add_definitions(-DPOWER_SLEEP_TIMEOUT_MS=15000 -DBLE_CONN_INTERVAL_L1_TIME=30000 -DPOWER_SHUTDOWN_TIMEOUT_MS=90000)
 endif()
 
-# Test variants only (BNK16_DEFS="-D..." for build-bnk16.sh), e.g. -DBNK16_BOOT_DIAG, -DBNK16_DEEP_SLEEP_NO_CHIP_SLEEP,
-# -DHAL_SLEEP_XT_PRE=0, -DHAL_BLE_IRQ_PRIORITY
+# Test variants only (BNK16_DEFS="-D..." for build-bnk16.sh), e.g. "-DBNK16_BOOT_DIAG -DBNK16_FAULT_DIAG".
+# The switches are listed in mcuconf.h.
 if(BNK16_DEFS)
     message(STATUS "BNK16: extra defines ${BNK16_DEFS}")
     separate_arguments(bnk16_defs UNIX_COMMAND "${BNK16_DEFS}")

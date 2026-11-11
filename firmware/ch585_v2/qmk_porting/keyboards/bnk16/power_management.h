@@ -35,7 +35,7 @@
 
 typedef enum {
     POWER_STATE_ACTIVE = 0,
-    POWER_STATE_SLEEPING, /* LEDs and their supply off, matrix still scanned (every 4 ms) */
+    POWER_STATE_SLEEPING, /* LEDs and their supply off; matrix still scanned (every 4 ms) until the deep sleep */
 } power_state_t;
 
 void power_init(void);

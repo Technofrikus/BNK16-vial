@@ -34,7 +34,7 @@ A tag with a dash, such as `v1.1.0-rc1`, is published as a **pre-release**.
 `vMAJOR.MINOR.PATCH`:
 
 - **PATCH:** bug fixes, nothing changes for the user.
-- **MINOR:** new features or changed defaults. The stored keymap may be reset, so mention that in the tag message.
+- **MINOR:** new features or changed defaults. The stored keymap is only reset when `VIAL_BUILD_ID` (`qmk_porting/keyboards/bnk16/rules.cmake`) was counted up for this release; if it was, mention that in the tag message.
 - **MAJOR:** the flash layout or the bootloader changes in a way that needs a `wchisp` flash of the full image again.
 
 The tag ends up in the firmware: the build uses `git describe`, so a tagged build reports exactly `v1.0.0`. Untagged local builds report something like `v1.0.0-3-gabc1234` (or `-dirty` with uncommitted changes).

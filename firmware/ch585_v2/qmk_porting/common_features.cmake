@@ -265,11 +265,17 @@ if(VIAL_ENABLE)
 
     # 鐢熸垚闅忔満 BUILD_ID锛堝拰瀹樻柟 QMK 涓€鑷达紝姣忔閰嶇疆 CMake 閮界敓鎴愭柊鍊硷級
     # 鏀瑰竷灞€鍚庨噸鏂伴厤缃?CMake锛孊UILD_ID 鍙樺寲浼氳嚜鍔ㄨЕ鍙?EEPROM 閲嶇疆
-    execute_process(
-        COMMAND python ${QMK_BASE_DIR}/util/build_id.py
-        OUTPUT_VARIABLE BUILD_ID_HEADER
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
+    # A keyboard can set VIAL_BUILD_ID in its rules.cmake to keep the stored keymap across updates
+    # (VIA resets the EEPROM whenever the ID differs from the one stored there).
+    if(VIAL_BUILD_ID)
+        set(BUILD_ID_HEADER "${VIAL_BUILD_ID}")
+    else()
+        execute_process(
+            COMMAND python ${QMK_BASE_DIR}/util/build_id.py
+            OUTPUT_VARIABLE BUILD_ID_HEADER
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+    endif()
     # 浠庤緭鍑轰腑鎻愬彇 0xXXXXXXXX 鐨勫€?
     string(REGEX MATCH "0x[0-9A-Fa-f]+" BUILD_ID_VALUE "${BUILD_ID_HEADER}")
     add_definitions(-DBUILD_ID=${BUILD_ID_VALUE})

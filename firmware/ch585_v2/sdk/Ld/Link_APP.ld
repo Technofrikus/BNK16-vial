@@ -178,6 +178,9 @@ SECTIONS
 	} >RAM AT>FLASH
 
 	PROVIDE( _end = _ebss);
+	/* The top 16K of the RAM are the stack; the BNK16 test builds also keep their fault block at the
+	   bottom of it (BNK16_FAULT in qmk_porting/keyboards/bnk16/bnk16_fault.h). Data must end below. */
+	ASSERT(_end <= ORIGIN(RAM) + LENGTH(RAM) - 16K, "RAM: data reaches into the top 16K (stack, BNK16 fault block)")
 	PROVIDE( end = . );
 	
 	.stack ORIGIN(RAM)+LENGTH(RAM) :
