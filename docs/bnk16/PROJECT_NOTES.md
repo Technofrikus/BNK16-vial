@@ -514,3 +514,15 @@ All fixes compile in the normal and in the diagnostic build. **None is tested on
 5. **A key held down for good** (something lying on the board): the deep sleep is entered and left again every 100 ms (`POWER_DEEP_SLEEP_RETRY_MS`, each time with a USB re-init), and the shutdown at 30 min reboots instead, so the board never reaches the 60 uA shutdown. **Left as it is: not relevant, decision of the owner 2026-11-11.**
 6. **Interrupts at the deep sleep entry. Fixed.** `bnk16_deep_sleep_enter()` switched the USB HS and TMR2 interrupts off inside the masked part, `SYS_RecoverIrq()` switched them on again, and two more calls switched them off after that. Now both go off before `SYS_DisableAllIrq()`, so they are not in the saved state and there is no window. Same end state as before (48b).
 7. **Diagnostic RAM block. Guarded.** `BNK16_FAULT` at `0x2001C000` is the bottom of the top 16K of the RAM, which nothing reserved. `sdk/Ld/Link_APP.ld` now has an `ASSERT` that the data ends below the top 16K (stack, and the block in test builds), so a build fails instead of overlapping. Today the data ends at `0x2000A070`. The stack is not checked: it would have to grow past 16 KB to reach the block.
+
+## 9. Options for later
+
+### BLE slave latency instead of the 100-120 ms interval (decided 2026-11-12: not now)
+
+Idea: keep the 15 ms connection interval but request a peripheral (slave) latency of about 7. In idle the board then only listens at every 8th event (about 120 ms, similar radio current to the 100-120 ms interval), but a key press can be sent at the very next 15 ms event, so the first key has at most 15 ms latency instead of up to 120 ms.
+
+Open points: the host decides. macOS and iOS limit latency and supervision timeout, other hosts may ignore the request. The supervision timeout must stay well above `interval * (latency + 1)`. Host-to-board traffic is delayed to the next listened event. Needs a test on every host in use before it replaces the 100-120 ms step (`BLE_CONN_INTERVAL_L1_*` in `ble_config.h`).
+
+### New idle timing (2026-11-12/13), build `bnk16-phase50-timers-15s-2h.uf2`
+
+Daily build, BT position: LEDs and their supply off and deep sleep 15 s after the last key (was 5 min), slow BLE interval (100-120 ms) 60 s after the sleep began, i.e. 75 s after the last key (was 5 min after the sleep), shutdown 2 h after the last key (was 30 min). No dimming stage: the LEDs go off at once. Values: `POWER_SLEEP_TIMEOUT_MS` and `POWER_SHUTDOWN_TIMEOUT_MS` in `power_management.h`, `BLE_CONN_INTERVAL_L1_TIME` in `ble_config.h`. Compiles; **not tested on the board.** Things to watch: second key right after the wake-up, fast knob turns after the wake-up, link losses and reconnects over hours, first key after the 2 h shutdown is not typed.

@@ -18,13 +18,13 @@
 
 /* Idle time before the board sleeps (LEDs off, link stays up) */
 #ifndef POWER_SLEEP_TIMEOUT_MS
-#define POWER_SLEEP_TIMEOUT_MS     (5 * 60 * 1000)
+#define POWER_SLEEP_TIMEOUT_MS     (15 * 1000)
 #endif
 
 /* Time after the last key until the board shuts down, the way the stock firmware sleeps: the link ends,
  * the chip is off except for the wake-up pins, and a key or knob reboots it (that key is not sent) */
 #ifndef POWER_SHUTDOWN_TIMEOUT_MS
-#define POWER_SHUTDOWN_TIMEOUT_MS  (30 * 60 * 1000)
+#define POWER_SHUTDOWN_TIMEOUT_MS  (2 * 60 * 60 * 1000)
 #endif
 
 /* Deep sleep: after a wake-up without a key (knob jitter), the QMK task gets this long to see a key
