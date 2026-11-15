@@ -12,6 +12,8 @@
  *                     sdk/HAL/RTC.c and user/usb/ch585_usbhs_device.c.
  *   BNK16_BOOT_DIAG   reset cause as the status LED colour for 4 s after boot
  *   BNK16_REGDUMP     register snapshot at the first deep sleep entry, typed after the wake-up
+ *   BNK16_CONN_DIAG   BLE interval change after a deep sleep wake-up with a key or knob step, typed as a
+ *                     "conn" line, see conn_diag_task()
  *
  * Do not use these builds with Vial writes (watchdog in deep sleep).
  */
@@ -481,9 +483,146 @@ static void wake_diag_task(void) {
     type_lsi();
 }
 
+#endif
+
+
+#ifdef BNK16_CONN_DIAG
+/* How fast the host takes the fast BLE interval after a deep sleep wake-up (phase 51). One record per
+ * deep sleep exit followed by a key or knob step; deep sleeps ended without one are dropped. Typed in
+ * decimal once 8 s have passed since the exit and no key came for 2 s:
+ *   "conn nN lL iI aA kK cC qQ xX rR zZ uU vV sS bB eE dD fF gG"
+ *   N: number of the record, L: requested interval level at the exit (1 = slow), I and A: interval
+ *   (1.25 ms units, 0 = no update since boot) and slave latency in use at the exit, as last reported by
+ *   the host, K: ms from the exit to
+ *   the first key event, C: key presses in the window, Q: ms from the exit to the (last) request for a new
+ *   interval (-1 = none), X: its result (0 = sent), R: requests in the window, Z: requests dropped by the
+ *   5 s limit, U: ms from the exit to the (last) update the host applied (-1 = none), V: its interval
+ *   (1.25 ms units), S: its slave latency, B: most packets waiting for the host at once, E: ms from the
+ *   exit to the last time packets were seen waiting, D: links ended since boot, F: reason of the last end
+ *   (8 = supervision timeout, 19 = host, 22 = board), G: s since then (0 = none) */
+typedef struct {
+    uint32_t n, lvl, int_exit, lat_exit, req0, upd0, drop0, presses, backlog_max;
+    uint32_t exit_time, key_time, last_key, backlog_time;
+    bool     open, key_seen;
+} conn_rec_t;
+static conn_rec_t conn_rec;
+static uint32_t   conn_total;
+
+static void conn_diag_exit(void) {
+    memset(&conn_rec, 0, sizeof(conn_rec));
+    conn_rec.open      = true;
+    conn_rec.exit_time = timer_read32();
+    conn_rec.lvl       = ble_get_current_interval_level();
+    conn_rec.int_exit  = ble_conn_diag.upd_interval;
+    conn_rec.lat_exit  = ble_conn_diag.upd_latency;
+    conn_rec.req0      = ble_conn_diag.req_count;
+    conn_rec.upd0      = ble_conn_diag.upd_count;
+    conn_rec.drop0     = ble_conn_diag.dropped;
+}
+
+static void conn_diag_enter(void) {
+    if (conn_rec.open && !conn_rec.key_seen) {
+        conn_rec.open = false; /* woken without a key (knob jitter) */
+    }
+}
+
+static void conn_diag_event(bool pressed) {
+    if (!conn_rec.open || !pressed) {
+        return;
+    }
+    if (!conn_rec.key_seen) {
+        conn_rec.key_seen = true;
+        conn_rec.key_time = timer_elapsed32(conn_rec.exit_time);
+    }
+    conn_rec.presses++;
+    conn_rec.last_key = timer_read32();
+}
+
+static char *conn_put(char *p, char tag, int32_t v) {
+    char     digits[11];
+    uint8_t  n = 0;
+    uint32_t u = v < 0 ? (uint32_t)-v : (uint32_t)v;
+    *p++ = ' ';
+    *p++ = tag;
+    if (v < 0) {
+        *p++ = '-';
+    }
+    do {
+        digits[n++] = '0' + u % 10;
+        u /= 10;
+    } while (u);
+    while (n) {
+        *p++ = digits[--n];
+    }
+    return p;
+}
+
+static void conn_type(const char *line) {
+    for (const char *c = line; *c; c++) {
+        char one[2] = { *c, 0 };
+        send_string(one);
+        bnk16_sleep_diag_feed();
+    }
+}
+
+static void conn_diag_task(void) {
+    if (!conn_rec.open || !conn_rec.key_seen) {
+        return;
+    }
+    uint32_t backlog = ble_tx_backlog();
+    if (backlog) {
+        conn_rec.backlog_time = timer_elapsed32(conn_rec.exit_time);
+        if (backlog > conn_rec.backlog_max) {
+            conn_rec.backlog_max = backlog;
+        }
+    }
+    if (timer_elapsed32(conn_rec.exit_time) < 8000 || timer_elapsed32(conn_rec.last_key) < 2000 ||
+        !ble_is_connected()) {
+        return;
+    }
+    conn_rec.open = false; /* before typing: its own reports are not counted */
+
+    bool got_req = ble_conn_diag.req_count != conn_rec.req0;
+    bool got_upd = ble_conn_diag.upd_count != conn_rec.upd0;
+    char line[160];
+    char *p = line;
+    memcpy(p, "conn", 4);
+    p += 4;
+    p = conn_put(p, 'n', ++conn_total);
+    p = conn_put(p, 'l', conn_rec.lvl);
+    p = conn_put(p, 'i', conn_rec.int_exit);
+    p = conn_put(p, 'a', conn_rec.lat_exit);
+    p = conn_put(p, 'k', conn_rec.key_time);
+    p = conn_put(p, 'c', conn_rec.presses);
+    p = conn_put(p, 'q', got_req ? (int32_t)(ble_conn_diag.req_time - conn_rec.exit_time) : -1);
+    p = conn_put(p, 'x', got_req ? ble_conn_diag.req_status : 0);
+    p = conn_put(p, 'r', ble_conn_diag.req_count - conn_rec.req0);
+    p = conn_put(p, 'z', ble_conn_diag.dropped - conn_rec.drop0);
+    p = conn_put(p, 'u', got_upd ? (int32_t)(ble_conn_diag.upd_time - conn_rec.exit_time) : -1);
+    p = conn_put(p, 'v', got_upd ? ble_conn_diag.upd_interval : 0);
+    p = conn_put(p, 's', got_upd ? ble_conn_diag.upd_latency : 0);
+    p = conn_put(p, 'b', conn_rec.backlog_max);
+    p = conn_put(p, 'e', conn_rec.backlog_time);
+    p = conn_put(p, 'd', ble_conn_diag.losses);
+    p = conn_put(p, 'f', ble_conn_diag.loss_reason);
+    p = conn_put(p, 'g', ble_conn_diag.losses ? timer_elapsed32(ble_conn_diag.loss_time) / 1000 : 0);
+    *p++ = '\n';
+    *p   = 0;
+    conn_type("........"); /* the first characters typed after a wake-up can get lost */
+    conn_type(line);
+}
+#endif
+
+#if defined(BNK16_FAULT_DIAG) || defined(BNK16_CONN_DIAG)
 /* process_record_kb belongs to the port (protocol/extra_keycode.c); the keymap has no pre_process hook */
 bool pre_process_record_user(uint16_t keycode, keyrecord_t *record) {
+#ifdef BNK16_FAULT_DIAG
     wake_diag_event(keycode, record->event.pressed);
+#endif
+#ifdef BNK16_CONN_DIAG
+    conn_diag_event(record->event.pressed);
+#endif
+    (void)keycode;
     return true;
 }
 #endif
@@ -556,6 +695,9 @@ void bnk16_sleep_diag_task(void) {
     fault_diag_task();
     stats_task();
 #endif
+#ifdef BNK16_CONN_DIAG
+    conn_diag_task();
+#endif
 #ifdef BNK16_REGDUMP
     regdump_task();
 #endif
@@ -599,6 +741,9 @@ void bnk16_sleep_diag_ds_enter_irq_off(void) {
 #ifdef BNK16_FAULT_DIAG
     wake_diag_enter();
 #endif
+#ifdef BNK16_CONN_DIAG
+    conn_diag_enter();
+#endif
 }
 
 void bnk16_sleep_diag_ds_armed(void) {
@@ -633,6 +778,9 @@ bool bnk16_sleep_diag_ds_poll(void) {
 void bnk16_sleep_diag_ds_exit(void) {
 #ifdef BNK16_FAULT_DIAG
     wake_diag_exit(); /* before the rows go back to QMK: a held key still pulls its column low */
+#endif
+#ifdef BNK16_CONN_DIAG
+    conn_diag_exit();
 #endif
 }
 

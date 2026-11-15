@@ -6,7 +6,7 @@
 
 #include QMK_KEYBOARD_H
 
-#if defined(BNK16_FAULT_DIAG) || defined(BNK16_BOOT_DIAG) || defined(BNK16_REGDUMP)
+#if defined(BNK16_FAULT_DIAG) || defined(BNK16_BOOT_DIAG) || defined(BNK16_REGDUMP) || defined(BNK16_CONN_DIAG)
 #define BNK16_SLEEP_DIAG
 #endif
 

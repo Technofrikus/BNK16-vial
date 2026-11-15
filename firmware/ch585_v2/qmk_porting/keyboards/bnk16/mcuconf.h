@@ -33,6 +33,7 @@
  *   BNK16_FAULT_DIAG                crash and hang reports, watchdogs in deep sleep (bnk16_sleep_diag.c)
  *   BNK16_BOOT_DIAG                 reset cause as a status LED colour for 4 s after boot (same file)
  *   BNK16_REGDUMP                   register snapshot at the first deep sleep (same file)
+ *   BNK16_CONN_DIAG                 BLE interval change after a deep sleep wake-up, typed (same file)
  *   BNK16_DEEP_SLEEP_NO_CHIP_SLEEP  deep sleep board side only (USB off, pins armed, no QMK task), the
  *                                   chip itself never sleeps (hal_sleep_allowed() always false)
  *   HAL_SLEEP_XT_PRE=0              see above

@@ -127,6 +127,10 @@ static ble_pending_extra_t pending_extra[] = {
 };
 #define BLE_PENDING_EXTRA_COUNT (sizeof(pending_extra) / sizeof(pending_extra[0]))
 
+#ifdef BNK16_CONN_DIAG
+static void conn_diag_request(uint16_t latency, uint8_t status);
+#endif
+
 /* Connection interval state, see the end of this file */
 static uint8_t current_interval_level = 0;
 static uint32_t last_param_update_time = 0;
@@ -454,12 +458,16 @@ static uint16_t ble_process_event(uint8_t task_id, uint16_t events)
     /* 参数更新事件 — 请求更新连接间隔 */
     if (events & START_PARAM_UPDATE_EVT) {
         if (current_state == BLE_STATE_CONNECTED) {
-            GAPRole_PeripheralConnParamUpdateReq(conn_handle,
+            uint8_t status = GAPRole_PeripheralConnParamUpdateReq(conn_handle,
                 BLE_MIN_CONN_INTERVAL,
                 BLE_MAX_CONN_INTERVAL,
                 BLE_SLAVE_LATENCY,
                 BLE_CONN_TIMEOUT,
                 ble_task_id);
+            (void)status;
+#ifdef BNK16_CONN_DIAG
+            conn_diag_request(BLE_SLAVE_LATENCY, status);
+#endif
             /* this asks for the fast level, so power_task() can move on from there if the board is asleep */
             current_interval_level = 0;
             last_param_update_time = timer_read32();
@@ -593,6 +601,13 @@ static void ble_state_cb(gapRole_States_t newState, gapRoleEvent_t *pEvent)
              * 6. CONNECTED: the link dropped: reconnect to the current slot
              * SWITCHING with nothing pending, IDLE, STANDBY: nothing to do
              */
+#ifdef BNK16_CONN_DIAG
+            if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
+                ble_conn_diag.losses++;
+                ble_conn_diag.loss_reason = ((gapTerminateLinkEvent_t *)pEvent)->reason;
+                ble_conn_diag.loss_time   = timer_read32();
+            }
+#endif
 #ifdef BNK16_FAULT_DIAG
             if (pEvent->gap.opcode == GAP_LINK_TERMINATED_EVENT) {
                 if (ble_link_diag.losses == 0) {
@@ -1404,21 +1419,45 @@ void ble_app_poll(void)
 #define PARAM_UPDATE_MIN_INTERVAL_MS  5000
 
 /* 核心：发送连接间隔更新请求 */
-static void ble_send_conn_interval_req(uint16_t min_interval, uint16_t max_interval)
+#ifdef BNK16_CONN_DIAG
+ble_conn_diag_t ble_conn_diag;
+
+static void conn_diag_request(uint16_t latency, uint8_t status)
+{
+    ble_conn_diag.req_count++;
+    ble_conn_diag.req_time   = timer_read32();
+    ble_conn_diag.req_latency = latency;
+    ble_conn_diag.req_status = status;
+}
+
+/* from hiddev.c, the GAP role's parameter update callback */
+void ble_conn_diag_update(uint16_t interval, uint16_t latency, uint16_t timeout)
+{
+    ble_conn_diag.upd_count++;
+    ble_conn_diag.upd_time     = timer_read32();
+    ble_conn_diag.upd_interval = interval;
+    ble_conn_diag.upd_latency  = latency;
+    ble_conn_diag.upd_timeout  = timeout;
+}
+#endif
+
+static void ble_send_conn_interval_req(uint16_t min_interval, uint16_t max_interval, uint16_t latency)
 {
     if (current_state != BLE_STATE_CONNECTED) return;
-    GAPRole_PeripheralConnParamUpdateReq(conn_handle,
-        min_interval, max_interval,
-        min_interval == BLE_CONN_INTERVAL_L0_MIN ? BLE_SLAVE_LATENCY : 0, BLE_CONN_TIMEOUT,
-        ble_task_id);
+    uint8_t status = GAPRole_PeripheralConnParamUpdateReq(conn_handle,
+        min_interval, max_interval, latency, BLE_CONN_TIMEOUT, ble_task_id);
+    (void)status;
+#ifdef BNK16_CONN_DIAG
+    conn_diag_request(latency, status);
+#endif
     last_param_update_time = timer_read32();
 }
 
 static void ble_send_conn_level_req(uint8_t level)
 {
     switch (level) {
-        case 0: ble_send_conn_interval_req(BLE_CONN_INTERVAL_L0_MIN, BLE_CONN_INTERVAL_L0_MAX); break;
-        default: ble_send_conn_interval_req(BLE_CONN_INTERVAL_L1_MIN, BLE_CONN_INTERVAL_L1_MAX); break;
+        case 0: ble_send_conn_interval_req(BLE_CONN_INTERVAL_L0_MIN, BLE_CONN_INTERVAL_L0_MAX, BLE_SLAVE_LATENCY); break;
+        default: ble_send_conn_interval_req(BLE_CONN_INTERVAL_L1_MIN, BLE_CONN_INTERVAL_L1_MAX, BLE_CONN_L1_LATENCY); break;
     }
     current_interval_level = level;
 }
@@ -1438,6 +1477,9 @@ void ble_request_conn_interval(uint8_t level)
     uint32_t now = timer_read32();
     if (last_param_update_time != 0 &&
         (now - last_param_update_time) < PARAM_UPDATE_MIN_INTERVAL_MS) {
+#ifdef BNK16_CONN_DIAG
+        ble_conn_diag.dropped++;
+#endif
         return;
     }
 
@@ -1456,7 +1498,7 @@ void ble_request_conn_interval_force(uint8_t level)
 /* 直接设置连接间隔（单位1.25ms，用于携带模式2000ms=1600）*/
 void ble_set_conn_interval_raw(uint16_t interval)
 {
-    ble_send_conn_interval_req(interval, interval);
+    ble_send_conn_interval_req(interval, interval, 0);
     current_interval_level = 0xFF; /* 标记为非标准档位 */
 }
 
@@ -1464,4 +1506,12 @@ void ble_set_conn_interval_raw(uint16_t interval)
 uint8_t ble_get_current_interval_level(void)
 {
     return current_interval_level;
+}
+
+uint32_t ble_tx_backlog(void)
+{
+    if (current_state != BLE_STATE_CONNECTED || conn_handle == GAP_CONNHANDLE_INIT) {
+        return 0;
+    }
+    return LL_GetNumberOfUnAckPacket(conn_handle);
 }

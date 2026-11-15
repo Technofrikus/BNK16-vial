@@ -824,6 +824,9 @@ static void hidDevParamUpdateCB(uint16_t connHandle, uint16_t connInterval,
                                 uint16_t connSlaveLatency, uint16_t connTimeout)
 {
     PRINT("Update %d - Int 0x%x - Latency %d\n", connHandle, connInterval, connSlaveLatency);
+#ifdef BNK16_CONN_DIAG
+    ble_conn_diag_update(connInterval, connSlaveLatency, connTimeout);
+#endif
 }
 
 /*********************************************************************

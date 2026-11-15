@@ -3,7 +3,7 @@
  *
  * BT position only (the USB position never sleeps):
  *   awake  -> sleep after POWER_SLEEP_TIMEOUT_MS without a key: LEDs and their supply off, BLE link kept
- *             (15 ms, 100-120 ms after BLE_CONN_INTERVAL_L1_TIME asleep, see ble_config.h); any key wakes
+ *             (15 ms, after BLE_CONN_INTERVAL_L1_TIME asleep 15 ms with slave latency 7, see ble_config.h); any key wakes
  *   asleep -> with BNK16_DEEP_SLEEP (mcuconf.h) also deep sleep: no QMK task, the chip sleeps between
  *             radio events with the link kept, a key or knob wakes it (power_deep_sleep_task())
  *   asleep -> shutdown POWER_SHUTDOWN_TIMEOUT_MS after the last key, or at once on an empty battery

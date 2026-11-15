@@ -27,7 +27,7 @@
  * 连接参数配置
  * ======================================================================== */
 
-/* Connection events the board may skip with nothing to send, active interval only. Must stay 0 for now:
+/* Connection events the board may skip with nothing to send, active level. Must stay 0 for now:
  * 30 dropped the link about 7 s after the last key (5 s supervision timeout included), most likely because
  * the internal 32 kHz RC clock (the board has no crystal) drifts too far over a 465 ms skip. */
 #define BLE_SLAVE_LATENCY           0
@@ -53,8 +53,22 @@
 
 #define BLE_CONN_INTERVAL_L0_MIN    12    /* 15 ms */
 #define BLE_CONN_INTERVAL_L0_MAX    12
+/* Phase 51: the slow level keeps the 15 ms interval and lets the board skip up to BLE_CONN_L1_LATENCY
+ * events with nothing to send (8 x 15 ms = 120 ms, the span without a sync that the 100-120 ms interval
+ * held for days). A key goes out at the next 15 ms event at once; with the 100-120 ms interval it waited
+ * for the host to take 15 ms again, measured 1.5-2.5 s (macOS, iOS) and sometimes not at all, and one
+ * knob step took 0.4-0.8 s to get out. Build with -DBNK16_L1_OLD_INTERVAL for the old level. */
+#ifdef BNK16_L1_OLD_INTERVAL
 #define BLE_CONN_INTERVAL_L1_MIN    80    /* 100-120 ms */
 #define BLE_CONN_INTERVAL_L1_MAX    96
+#define BLE_CONN_L1_LATENCY         0
+#else
+#define BLE_CONN_INTERVAL_L1_MIN    12    /* 15 ms */
+#define BLE_CONN_INTERVAL_L1_MAX    12
+#ifndef BLE_CONN_L1_LATENCY
+#define BLE_CONN_L1_LATENCY         7
+#endif
+#endif
 
 /* Time asleep before the level is used, ms (75 s after the last key with the 15 s sleep timeout) */
 #ifndef BLE_CONN_INTERVAL_L1_TIME

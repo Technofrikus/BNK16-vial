@@ -157,4 +157,29 @@ void ble_set_conn_interval_raw(uint16_t interval);
 /* Requested level, 0xFF for a raw interval */
 uint8_t ble_get_current_interval_level(void);
 
+#ifdef BNK16_CONN_DIAG
+/* Connection parameter requests and the updates the host applied (bnk16_sleep_diag.c, conn_diag) */
+typedef struct {
+    uint32_t req_count;    /* requests sent */
+    uint32_t req_time;     /* timer_read32() of the last one */
+    uint16_t req_latency;  /* its slave latency */
+    uint8_t  req_status;   /* its GAPRole_PeripheralConnParamUpdateReq() result */
+    uint32_t dropped;      /* requests dropped by the 5 s limit */
+    uint32_t upd_count;    /* updates the host applied */
+    uint32_t upd_time;     /* timer_read32() of the last one */
+    uint16_t upd_interval; /* its interval, 1.25 ms units (0 = none since boot) */
+    uint16_t upd_latency;
+    uint16_t upd_timeout;
+    uint32_t losses;       /* links ended since boot */
+    uint32_t loss_time;    /* timer_read32() of the last end */
+    uint8_t  loss_reason;  /* its reason (8 = supervision timeout, 0x13 = host, 0x16 = board) */
+} ble_conn_diag_t;
+extern ble_conn_diag_t ble_conn_diag;
+void ble_conn_diag_update(uint16_t interval, uint16_t latency, uint16_t timeout);
+#endif
+
+/* Packets handed to the link layer and not yet acknowledged by the host, 0 without a link. After a long
+ * sleep the link runs at the slow interval until the host takes the fast one, and reports pile up here. */
+uint32_t ble_tx_backlog(void);
+
 #endif /* __BLE_APP_H */
