@@ -22,6 +22,7 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 | Big knob | A = PB8, B = PB9 | No detents, no switch. 20 quadrature cycles per turn, resolution 1, direction hysteresis in `bnk16.c` |
 | WS2812 data | PA10 | TMR1 PWM + DMA. 16 key LEDs (row-major), then 1 status LED (index 16) |
 | LED supply enable | PA11 | High = on |
+| Battery voltage | PA6 (AIN10) | 1:2 divider, always on (part of the shutdown current). Calibrated: Vbat = 1.9844 x PA6 + 25 mV. Sits at the charger's 4.2 V while charging |
 | USB/BT slide switch | PB11 | Mode input, pull-up set. Low = BT position, high = USB position (measured). Read at boot and debounced 50 ms at runtime in `bnk16.c`; it alone decides the mode, also with a USB cable in. The switch also cuts battery + |
 | Haptic motor | PA7 | Found with the pin scan. Low = on (P-FET), rests high. Needs a square wave, steady low does not vibrate it. The firmware uses 128 Hz by default, adjustable from 64 to 256 Hz. The on/off switch is hardware only (GND to the drain of a 3401 P-MOSFET) |
 
@@ -29,9 +30,8 @@ The USB connector is on the high-speed port (PB12/PB13). The full-speed port mus
 
 | Function | State |
 |---|---|
-| Battery ADC | Stock code suggests AIN12, not checked. The enable pin it suggests (PB17) is an encoder pin, so that reading is wrong |
 | VBUS detect | No pin known. USB state is taken from the USBHS driver, so an unplugged cable and a suspended host look the same |
-| Charger status | No pin known |
+| Charger status | No pin known. The cable probe of 2026-11-03 (phase 40e, 16 free pins) found none that follows the cable, so the charge LED is hardware only. Charging is only seen as the battery voltage at 4.2 V |
 | Debug UART | PA9/PA8 from the stock code, unverified |
 
 ## Going back to stock

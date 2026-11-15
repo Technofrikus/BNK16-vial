@@ -189,8 +189,19 @@ static const rgb_t layer_colors[] = {
 
 #define STATUS_BATTERY_ON_MS    10000 /* on battery the layer colour goes off after this */
 #define STATUS_CONNECTED_MS     2000
-#define STATUS_FLASH_FAILED_MS  600   /* one period of the red flashes */
+#define STATUS_FLASH_FAILED_MS  600   /* one period of the blue/red flashes */
 #define STATUS_FLASH_FAILED_N   3
+#define STATUS_FLASH_LOW_BAT_MS 300   /* one period of the red flashes */
+#define STATUS_FLASH_LOW_BAT_N  3
+#define STATUS_BATTERY_LEVEL_MS 3000  /* BATTERY_SHOW: the level as a colour */
+#define STATUS_EMPTY_MS         2000  /* steady red before the shutdown on an empty battery */
+/* Low battery warning on a key press: at the first key after a wake-up or boot, then at most once per
+ * interval while keys are used. Each warning powers the whole LED chain for about 1.4 s (the flashes
+ * plus WS2812_POWER_OFF_DELAY_MS), so it is rationed. */
+#define LOW_BATTERY_LEVEL       20    /* percent, below this */
+#define LOW_BATTERY_INTERVAL_MS (5 * 60 * 1000)
+#define VERY_LOW_BATTERY_LEVEL  10
+#define VERY_LOW_BATTERY_INTERVAL_MS (60 * 1000)
 #define BLINK_PAIRING_MS        500
 #define BLINK_SEARCHING_MS      1000
 #define LEDS_OFF_REFRESH_MS     50
@@ -198,8 +209,10 @@ static const rgb_t layer_colors[] = {
 
 typedef enum {
     STATUS_MSG_NONE,
-    STATUS_MSG_FAILED,
-    STATUS_MSG_CONNECTED,
+    STATUS_MSG_FAILED,        /* BLE found no host: blue/red flashes */
+    STATUS_MSG_CONNECTED,     /* steady blue */
+    STATUS_MSG_LOW_BATTERY,   /* short red flashes */
+    STATUS_MSG_BATTERY_LEVEL, /* BATTERY_SHOW: green to red by level */
 } status_msg_t;
 
 static status_msg_t status_msg;
@@ -209,6 +222,130 @@ static uint32_t     status_layer_start;
 static void status_msg_show(status_msg_t msg) {
     status_msg       = msg;
     status_msg_start = timer_read32();
+}
+
+static uint32_t status_msg_duration(status_msg_t msg) {
+    switch (msg) {
+        case STATUS_MSG_FAILED:
+            return STATUS_FLASH_FAILED_MS * STATUS_FLASH_FAILED_N;
+        case STATUS_MSG_CONNECTED:
+            return STATUS_CONNECTED_MS;
+        case STATUS_MSG_LOW_BATTERY:
+            return STATUS_FLASH_LOW_BAT_MS * STATUS_FLASH_LOW_BAT_N;
+        case STATUS_MSG_BATTERY_LEVEL:
+            return STATUS_BATTERY_LEVEL_MS;
+        default:
+            return 0;
+    }
+}
+
+/* Battery level to colour for BATTERY_SHOW, in 20 % steps from green over yellow to red. Red is the
+ * same range as the low battery warning. */
+static const struct {
+    uint8_t min_percent;
+    rgb_t   color;
+} battery_level_colors[] = {
+    { 80, {.r = 0, .g = 255, .b = 0} },   /* green */
+    { 60, {.r = 128, .g = 255, .b = 0} }, /* yellow-green */
+    { 40, {.r = 255, .g = 255, .b = 0} }, /* yellow */
+    { 20, {.r = 255, .g = 100, .b = 0} }, /* orange */
+    { 0, {.r = 255, .g = 0, .b = 0} },    /* red */
+};
+
+static rgb_t battery_level_color(void) {
+    uint8_t level = battery_get_level();
+    for (uint8_t i = 0; i < ARRAY_SIZE(battery_level_colors) - 1; i++) {
+        if (level >= battery_level_colors[i].min_percent) {
+            return battery_level_colors[i].color;
+        }
+    }
+    return battery_level_colors[ARRAY_SIZE(battery_level_colors) - 1].color;
+}
+
+/* On battery and not charging. No VBUS pin: a plain charger or a host in standby counts as battery
+ * until the charger lifts the cell to its charging level. */
+static bool on_battery(void) {
+    return !wired_mode_active && !usb_is_connected() && !battery_is_charging();
+}
+
+/* ------------------------------------------------------------------------
+ * Empty battery: steady red for STATUS_EMPTY_MS while awake, then the shutdown. The flag in kb_config
+ * makes the next boots check the cell before BLE starts: at rest the cell climbs back over the shutdown
+ * level, so without the flag the board would run another 30-40 s (4 readings) and drop again. With it
+ * the board only starts from BATTERY_RECOVER_VOLTAGE_MV, which only a charge reaches.
+ * ------------------------------------------------------------------------ */
+static bool     empty_pending;   /* the red is on, the shutdown follows */
+static uint32_t empty_since;
+static bool     empty_at_boot;   /* found empty at boot: BLE was not started */
+
+static void battery_empty_flag_set(bool empty);
+static bool battery_empty_flag(void);
+
+void bnk16_battery_empty_task(bool empty) {
+    /* a USB host keeps the board on (bnk16_shutdown_possible()): no shutdown to announce */
+    if (!empty || usb_is_connected()) {
+        if (empty_at_boot) {
+            ble_restore_last_mode(); /* the boot check held it back, but there is no shutdown now */
+        }
+        empty_pending = false;
+        empty_at_boot = false;
+        return;
+    }
+    if (!empty_pending) {
+        empty_pending = true;
+        empty_since   = timer_read32();
+    }
+    /* asleep nobody sees the LED; the next key boots and shows it. A haptic burst only delays it. */
+    if ((power_get_state() == POWER_STATE_SLEEPING || timer_elapsed32(empty_since) >= STATUS_EMPTY_MS) && bnk16_shutdown_possible()) {
+        battery_empty_flag_set(true);
+        bnk16_shutdown();
+    }
+}
+
+bool bnk16_battery_empty_at_boot(void) {
+    return empty_at_boot;
+}
+
+/* From main() before BLE starts, BT position only. The first reading has no smoothing, but it is taken
+ * without LED or radio load, so it is the higher one. */
+static bool battery_boot_check(void) {
+    uint16_t mv = battery_get_voltage_mv();
+    if (battery_empty_flag()) {
+        if (mv < BATTERY_RECOVER_VOLTAGE_MV) {
+            return true;
+        }
+        battery_empty_flag_set(false);
+        return false;
+    }
+    return mv < BATTERY_SHUTDOWN_VOLTAGE_MV;
+}
+
+/* From the keymap on every key press: the low battery warning, rationed, see LOW_BATTERY_INTERVAL_MS */
+static bool     low_battery_warned; /* since the last wake-up or boot */
+static uint32_t low_battery_warned_at;
+
+void bnk16_low_battery_check(void) {
+    if (!on_battery() || status_msg != STATUS_MSG_NONE || empty_pending) {
+        return;
+    }
+    uint8_t level = battery_get_level();
+    if (level >= LOW_BATTERY_LEVEL) {
+        return;
+    }
+    uint32_t interval = level < VERY_LOW_BATTERY_LEVEL ? VERY_LOW_BATTERY_INTERVAL_MS : LOW_BATTERY_INTERVAL_MS;
+    if (low_battery_warned && timer_elapsed32(low_battery_warned_at) < interval) {
+        return;
+    }
+    low_battery_warned    = true;
+    low_battery_warned_at = timer_read32();
+    status_msg_show(STATUS_MSG_LOW_BATTERY);
+}
+
+/* BATTERY_SHOW. In the USB position the switch cuts the battery, so there is no level to show. */
+void bnk16_battery_show(void) {
+    if (!wired_mode_active) {
+        status_msg_show(STATUS_MSG_BATTERY_LEVEL);
+    }
 }
 
 static inline bool blink_on(uint16_t period_ms) {
@@ -267,12 +404,17 @@ static void status_led_task(void) {
         }
     }
 
-    if (status_msg != STATUS_MSG_NONE) {
-        uint32_t duration = status_msg == STATUS_MSG_FAILED ? STATUS_FLASH_FAILED_MS * STATUS_FLASH_FAILED_N : STATUS_CONNECTED_MS;
-        if (timer_elapsed32(status_msg_start) >= duration) {
-            status_msg         = STATUS_MSG_NONE;
+    if (sleeping) {
+        low_battery_warned = false; /* warn again at the first key after the wake-up */
+    }
+
+    if (status_msg != STATUS_MSG_NONE && timer_elapsed32(status_msg_start) >= status_msg_duration(status_msg)) {
+        /* after a BLE result the layer colour follows; the battery messages leave the LED off, so they
+         * do not keep the LED supply on for STATUS_BATTERY_ON_MS on a low cell */
+        if (status_msg == STATUS_MSG_FAILED || status_msg == STATUS_MSG_CONNECTED) {
             status_layer_start = timer_read32();
         }
+        status_msg = STATUS_MSG_NONE;
     }
 }
 
@@ -286,11 +428,17 @@ static bool ble_waiting_color(rgb_t *color) {
 }
 
 
-/* Highest priority first: pairing, searching, result messages, layer colour */
+/* Highest priority first: empty battery, battery level, pairing, searching, other messages, layer colour */
 static rgb_t status_led_color(void) {
     rgb_t color;
     if (bnk16_sleep_diag_boot_color(&color)) { /* test builds only */
         return color;
+    }
+    if (empty_pending) {
+        return COLOR_RED;
+    }
+    if (status_msg == STATUS_MSG_BATTERY_LEVEL) {
+        return battery_level_color();
     }
     if (ble_waiting_color(&color)) {
         return color;
@@ -298,9 +446,11 @@ static rgb_t status_led_color(void) {
     uint32_t elapsed = timer_elapsed32(status_msg_start);
     switch (status_msg) {
         case STATUS_MSG_FAILED:
-            return elapsed % STATUS_FLASH_FAILED_MS < STATUS_FLASH_FAILED_MS / 2 ? COLOR_RED : COLOR_OFF;
+            return elapsed % STATUS_FLASH_FAILED_MS < STATUS_FLASH_FAILED_MS / 2 ? COLOR_BLUE : COLOR_RED;
         case STATUS_MSG_CONNECTED:
             return COLOR_BLUE;
+        case STATUS_MSG_LOW_BATTERY:
+            return elapsed % STATUS_FLASH_LOW_BAT_MS < STATUS_FLASH_LOW_BAT_MS / 2 ? COLOR_RED : COLOR_OFF;
         default:
             break;
     }
@@ -426,7 +576,8 @@ static void leds_off_task(void) {
  * period out of phase with the drive, to counter the ringing. The drive can only push one way, so
  * this damps the motor instead of stopping it.
  * ======================================================================== */
-/* The board's settings word in EEPROM (eeconfig_read_kb): haptics, big knob resolution and the LED mask */
+/* The board's settings word in EEPROM (eeconfig_read_kb): haptics, big knob resolution, the LED mask and
+ * the empty battery flag */
 typedef union {
     uint32_t raw;
     struct {
@@ -435,7 +586,8 @@ typedef union {
         uint32_t knob_steps : 4; /* big knob steps per key press and burst */
         uint32_t brake : 1;
         uint32_t show_unassigned : 1; /* LED setting kept in this word: 0 = unassigned keys stay dark */
-        uint32_t unused : 4;
+        uint32_t battery_empty : 1;   /* shut down on an empty battery, see battery_boot_check() */
+        uint32_t unused : 3;
         uint32_t magic : 8;
     };
 } kb_config_t;
@@ -514,8 +666,10 @@ static void haptic_save_and_buzz(void) {
 /* Called by the custom keycodes in keymap.c; every change gives a sample burst */
 void bnk16_haptic_reset(void) {
     bool show_unassigned = kb_config.show_unassigned;
+    bool battery_empty   = kb_config.battery_empty;
     kb_config_set_defaults();
     kb_config.show_unassigned = show_unassigned;
+    kb_config.battery_empty   = battery_empty;
     haptic_save_and_buzz();
 }
 
@@ -526,6 +680,18 @@ void bnk16_toggle_show_unassigned(void) {
 
 bool bnk16_show_unassigned(void) {
     return kb_config.show_unassigned;
+}
+
+/* Written once per empty shutdown and once when a charged cell clears it */
+static void battery_empty_flag_set(bool empty) {
+    if (kb_config.battery_empty != empty) {
+        kb_config.battery_empty = empty;
+        eeconfig_update_kb(kb_config.raw);
+    }
+}
+
+static bool battery_empty_flag(void) {
+    return kb_config.battery_empty;
 }
 
 void bnk16_haptic_toggle_brake(void) {
@@ -1006,10 +1172,14 @@ int main(void) {
     battery_init();
     power_init();
 
-    /* the mode comes from the switch; TMOS runs from the loop below, so BLE has not started anything yet */
+    /* the mode comes from the switch; TMOS runs from the loop below, so BLE has not started anything yet.
+     * An empty battery in the BT position skips BLE: power_task() shows the red and shuts down. */
     wired_mode_active = mode_switch_is_usb();
     power_set_wired_mode(wired_mode_active);
-    ble_restore_last_mode();
+    empty_at_boot = !wired_mode_active && battery_boot_check();
+    if (!empty_at_boot) {
+        ble_restore_last_mode();
+    }
 
     for (;;) {
         platform_run();

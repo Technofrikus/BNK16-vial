@@ -7,6 +7,7 @@
  *   asleep -> with BNK16_DEEP_SLEEP (mcuconf.h) also deep sleep: no QMK task, the chip sleeps between
  *             radio events with the link kept, a key or knob wakes it (power_deep_sleep_task())
  *   asleep -> shutdown POWER_SHUTDOWN_TIMEOUT_MS after the last key, or at once on an empty battery
+ *   awake  -> on an empty battery: 2 s red on the status LED, then the shutdown (bnk16_battery_empty_task())
  * Awake and in light sleep the core waits in WFI between QMK tasks (platform_run() in protocol_usb.c).
  */
 

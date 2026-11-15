@@ -44,6 +44,13 @@ void bnk16_toggle_show_unassigned(void);
 bool bnk16_show_unassigned(void);
 uint8_t bnk16_keycode_bt_device(uint16_t keycode);
 
+/* Battery messages on the status LED: the warning check runs on every key press (keymap.c), BATTERY_SHOW
+ * shows the level as a colour; power_management.c runs the empty battery shutdown (red first, then off) */
+void bnk16_low_battery_check(void);
+void bnk16_battery_show(void);
+void bnk16_battery_empty_task(bool empty);
+bool bnk16_battery_empty_at_boot(void);
+
 /* Shutdown and deep sleep, used by power_management.c (bnk16_shutdown_possible() also gates the deep sleep) */
 bool bnk16_shutdown_possible(void);
 __attribute__((noreturn)) void bnk16_shutdown(void);

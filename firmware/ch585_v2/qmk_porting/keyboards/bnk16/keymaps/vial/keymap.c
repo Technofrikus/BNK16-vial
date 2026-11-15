@@ -1,6 +1,6 @@
 /*
- * BNK16 Vial keymap: numpad on layer 0, the Bluetooth keys in the top row of layer 3, layers 1-2 and the
- * rest of layer 3 empty (layers are selected by the 4-position switch). Empty keys are KC_NO, so they stay
+ * BNK16 Vial keymap: numpad on layer 0, the Bluetooth keys in the top row of layer 3 and BATTERY_SHOW
+ * bottom right on layer 3, layers 1-2 and the rest of layer 3 empty (layers are selected by the 4-position switch). Empty keys are KC_NO, so they stay
  * dark until assigned; encoder clicks and rotation stay transparent.
  *
  * Custom keycodes (same order as customKeycodes in vial.json):
@@ -13,6 +13,8 @@
  *   KNOB_RES_DOWN/UP    big knob resolution (key presses and haptic bursts per turn: 80 / steps per key, 1-8)
  *   HAPTIC_RESET        all haptic settings and the knob resolution back to the defaults
  *   LED_MASK            light unassigned keys too / keep them dark (default)
+ *   BATTERY_SHOW        status LED shows the battery level for 3 s: green, yellow-green, yellow, orange,
+ *                       red in 20 % steps; nothing in the USB switch position (the switch cuts the battery)
  */
 
 #include QMK_KEYBOARD_H
@@ -36,6 +38,7 @@ enum custom_keycodes {
     KNOB_RES_UP,
     HAPTIC_RESET,
     LED_MASK,
+    BATTERY_SHOW,
 };
 
 // clang-format off
@@ -61,7 +64,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         BT_1,    BT_2,    BT_3,    KC_NO,
         KC_NO,   KC_NO,   KC_NO,   KC_NO,
         KC_NO,   KC_NO,   KC_NO,   KC_NO,
-        KC_NO,   KC_NO,   KC_NO,   KC_NO,
+        KC_NO,   KC_NO,   KC_NO,   BATTERY_SHOW,
         KC_TRNS, KC_TRNS
     ),
 };
@@ -123,6 +126,16 @@ uint8_t bnk16_keycode_bt_device(uint16_t keycode) {
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (record->event.pressed) {
         power_notify_activity();
+        if (keycode != BATTERY_SHOW) {
+            bnk16_low_battery_check(); /* red flashes now and then below 20 % */
+        }
+    }
+
+    if (keycode == BATTERY_SHOW) {
+        if (record->event.pressed) {
+            bnk16_battery_show();
+        }
+        return false;
     }
 
     /* after a reconnect timeout any key restarts the reconnect; the BT keys choose a slot themselves */

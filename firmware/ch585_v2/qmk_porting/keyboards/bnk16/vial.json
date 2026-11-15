@@ -125,6 +125,11 @@
       "name": "LED_MASK",
       "title": "LEDs: Light Unassigned Keys On/Off",
       "shortName": "LedMsk"
+    },
+    {
+      "name": "BATTERY_SHOW",
+      "title": "Show Battery Level on the Status LED (green to red)",
+      "shortName": "Batt"
     }
   ]
 }

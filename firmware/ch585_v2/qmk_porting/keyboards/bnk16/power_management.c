@@ -59,10 +59,9 @@ void power_task(void)
         return;
     }
 
-    /* Empty battery: shut down to protect the cell, the same way as after a long idle; a key reboots it */
-    if (battery_is_critical() && bnk16_shutdown_possible()) {
-        bnk16_shutdown();
-    }
+    /* Empty battery: shut down to protect the cell, the same way as after a long idle; a key reboots it.
+     * Awake the status LED shows red for 2 s first (bnk16.c). */
+    bnk16_battery_empty_task(battery_is_critical() || bnk16_battery_empty_at_boot());
 
     if (current_power_state == POWER_STATE_SLEEPING) {
         /* slower BLE interval after a while asleep */

@@ -12,6 +12,9 @@
 #define BATTERY_EMPTY_VOLTAGE_MV     3300
 /* Below this (smoothed) the board shuts down on battery to protect the cell; a key reboots it */
 #define BATTERY_SHUTDOWN_VOLTAGE_MV  3200
+/* After a shutdown on an empty battery the board only starts again from this voltage (read at boot, no
+ * load): a cell recovering at rest climbs back over the shutdown level, only a charge brings it here */
+#define BATTERY_RECOVER_VOLTAGE_MV   3500
 /* At or above this (smoothed) the charger is taken to be running: it holds the cell at 4.2 V (PA6 read
  * 4.18-4.19 V with the cable in, phase 40c), a cell on its own rests below. A full cell with the charger
  * done reads the same with or without the cable, so this only sees a cable while the battery charges. */

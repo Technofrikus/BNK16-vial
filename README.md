@@ -30,7 +30,9 @@ And a few things the stock firmware didn't have:
 - **Bluetooth status on the keys:** the key bound to the active Bluetooth device lights blue when connected and blinks while pairing or searching
 - **Only bound keys light up:** keys that have nothing assigned in Vial stay dark, so you can see your layout at a glance (there's a key to turn that off)
 - **Deep sleep with the Bluetooth link kept:** when idle in the Bluetooth position the chip sleeps between radio events and stays connected, so the first key press after a break is typed right away without reconnecting. About 800 µA at the 15 ms interval and about 200 µA at the slow level (15 ms with slave latency 7, so the first key after a break goes out at once; before it was 100-120 ms and the host took seconds to switch back), against 8.4 mA with the plain sleep before. A key, a knob or the slide switch wakes it, and the waking key is typed. After a long idle time the board shuts down completely (about 60 µA); a key then reboots and reconnects. Can be switched off at build time with `BNK16_DEEP_SLEEP` in `mcuconf.h`
-- **Status LED** shows the current layer by colour (white, purple, orange, green), blinks blue while connecting, flashes red if a connection fails
+- **Status LED** shows the current layer by colour (white, purple, orange, green), blinks blue while connecting, flashes blue and red in turn if a connection fails
+- **Low battery warning:** below 20 % the status LED flashes red three times at the first key after a wake-up, then at most every 5 minutes (every minute below 10 %). Before the board shuts down on an empty battery the LED is red for 2 s; after such a shutdown it only starts again once the battery has been charged (it shows the red and switches off again until then)
+- **Battery level on a key:** `BATTERY_SHOW` lights the status LED for 3 s in green, yellow-green, yellow, orange or red, in 20 % steps
 - **Adjustable resolution for the big knob:** how many steps it sends per turn, changeable with two keys that go from green to red as you near the limit
 - **Haptic settings** (frequency, length, brake pulse) changeable with keys and saved on the board
 
@@ -41,7 +43,7 @@ And because it's Vial:
 - All the modifier shortcuts (`LSA(KC__VOLUP)` and friends), media keys, mouse wheel
 - RGB effects, configurable in Vial's Lighting tab
 
-The Bluetooth, haptic, knob and reset keys are under **User** in Vial's keycode list.
+The Bluetooth, haptic, knob, battery and reset keys are under **User** in Vial's keycode list.
 
 ## Default keymap
 
