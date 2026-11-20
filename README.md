@@ -10,6 +10,8 @@ It's based on [NookCraftLab/ch585-qmk-vial](https://github.com/NookCraftLab/ch58
 
 **There is no way back to the stock firmware.** Flashing this overwrites Binepad's bootloader. I tried restoring the stock firmware and the board stayed dead: the only stock image you can download is built for a different hardware revision (I think), and the matching one is locked inside the read-protected stock bootloader. Unless Binepad hands out a working image, once you flash this, you stay on this firmware.
 
+**Check your PCB first.** Open the case and compare your board with these photos ([top side](pictures/pcb-top.jpg), [bottom side with the hot-swap sockets](pictures/pcb-bottom.jpg)). Only flash if it looks the same; a different hardware revision may not work with this firmware.
+
 The board itself can't be bricked though. The real bootloader is in ROM, so you can always flash this or other firmwares again, if you have them.
 
 </font>
