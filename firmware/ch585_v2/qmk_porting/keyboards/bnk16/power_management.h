@@ -4,7 +4,8 @@
  * BT position only (the USB position never sleeps):
  *   awake  -> sleep after POWER_SLEEP_TIMEOUT_MS without a key: LEDs and their supply off, BLE link kept
  *             (15 ms, after BLE_CONN_INTERVAL_L1_TIME asleep 15 ms with slave latency 7, see ble_config.h); any key wakes
- *   asleep -> with BNK16_DEEP_SLEEP (mcuconf.h) also deep sleep: no QMK task, the chip sleeps between
+ *   asleep -> with BNK16_DEEP_SLEEP (mcuconf.h) also deep sleep after the light sleep time (a setting, 1 s to
+ *             120 min, default 5 min, bnk16_light_sleep_ms()): no QMK task, the chip sleeps between
  *             radio events with the link kept, a key or knob wakes it (power_deep_sleep_task())
  *   asleep -> shutdown POWER_SHUTDOWN_TIMEOUT_MS after the last key, or at once on an empty battery
  *   awake  -> on an empty battery: 2 s red on the status LED, then the shutdown (bnk16_battery_empty_task())
@@ -25,7 +26,7 @@
 /* Time after the last key until the board shuts down, the way the stock firmware sleeps: the link ends,
  * the chip is off except for the wake-up pins, and a key or knob reboots it (that key is not sent) */
 #ifndef POWER_SHUTDOWN_TIMEOUT_MS
-#define POWER_SHUTDOWN_TIMEOUT_MS  (2 * 60 * 60 * 1000)
+#define POWER_SHUTDOWN_TIMEOUT_MS  (4 * 60 * 60 * 1000)
 #endif
 
 /* Deep sleep: after a wake-up without a key (knob jitter), the QMK task gets this long to see a key

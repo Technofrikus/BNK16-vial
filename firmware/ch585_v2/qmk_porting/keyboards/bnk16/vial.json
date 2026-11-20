@@ -130,6 +130,21 @@
       "name": "BATTERY_SHOW",
       "title": "Show Battery Level on the Status LED (green to red)",
       "shortName": "Batt"
+    },
+    {
+      "name": "SLEEP_TIME_DOWN",
+      "title": "Sleep Time Shorter (LEDs off, before the deep sleep)",
+      "shortName": "Slp-"
+    },
+    {
+      "name": "SLEEP_TIME_UP",
+      "title": "Sleep Time Longer (LEDs off, before the deep sleep)",
+      "shortName": "Slp+"
+    },
+    {
+      "name": "SETTINGS_TYPE",
+      "title": "Type Current Settings",
+      "shortName": "TypSet"
     }
   ]
 }

@@ -19,10 +19,16 @@ static bool          s_wired_mode;
 static bool          s_deep_sleep;
 static uint32_t      deep_sleep_exit_time;
 static uint32_t      deep_sleep_wait_ms; /* QMK task time before the next deep sleep may start */
-/* Phase 47w: the QMK task gets this long after the board falls asleep before the first deep sleep, as it
- * gets before every later one. The LEDs are switched off by it (suspend, supply), and in 47v the link
- * held in the deep sleeps that followed an exit but never in the first one. */
-#define POWER_DEEP_SLEEP_SETTLE_MS 1000
+/* Light sleep: the QMK task keeps running (matrix scan every 4 ms, so all knobs work) this long after the
+ * board falls asleep, then the first deep sleep follows. It is a setting (bnk16.c, three keycodes, 1 s to
+ * 120 min, default 5 min). Phase 47w: even the shortest value gives the QMK task time to switch the LEDs
+ * off (suspend, supply) before the deep sleep, and in 47v the link held in the deep sleeps that followed
+ * an exit but never in the first one. A test build can pin it with -DPOWER_DEEP_SLEEP_SETTLE_MS=<ms>. */
+#ifdef POWER_DEEP_SLEEP_SETTLE_MS
+#define light_sleep_ms() ((uint32_t)POWER_DEEP_SLEEP_SETTLE_MS)
+#else
+#define light_sleep_ms() bnk16_light_sleep_ms()
+#endif
 #endif
 
 void power_init(void)
@@ -38,7 +44,7 @@ static void power_enter_sleep(void)
     ble_request_conn_interval(0); /* stays fast for the first part of the sleep */
 #ifdef BNK16_DEEP_SLEEP
     deep_sleep_exit_time = sleep_start_time;
-    deep_sleep_wait_ms   = POWER_DEEP_SLEEP_SETTLE_MS;
+    deep_sleep_wait_ms   = light_sleep_ms();
 #endif
 }
 

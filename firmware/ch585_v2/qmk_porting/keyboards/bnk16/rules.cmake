@@ -43,11 +43,11 @@ add_definitions(-DUSB_PORT_CONFIG=USB_PORT_HIGH_SPEED)
 add_definitions(-DBLE_TX_NUM_EVENT=3)
 
 # Test build only (BNK16_TEST_TIMERS=1 for build-bnk16.sh): shorter idle stages than the daily build (sleep 15 s
-# after the last key, slow BLE interval 60 s later, shutdown 2 h after). Test: sleep 15 s after the last key,
+# after the last key, slow BLE interval 60 s later, shutdown 4 h after, light sleep 5 min by default). Test: sleep 15 s after the last key,
 # slow BLE interval 30 s later, shutdown 90 s after the last key.
 if(BNK16_TEST_TIMERS)
-    message(STATUS "BNK16: test timers (15/30/90 s)")
-    add_definitions(-DPOWER_SLEEP_TIMEOUT_MS=15000 -DBLE_CONN_INTERVAL_L1_TIME=30000 -DPOWER_SHUTDOWN_TIMEOUT_MS=90000)
+    message(STATUS "BNK16: test timers (15/30/90 s, light sleep 1 s)")
+    add_definitions(-DPOWER_SLEEP_TIMEOUT_MS=15000 -DBLE_CONN_INTERVAL_L1_TIME=30000 -DPOWER_SHUTDOWN_TIMEOUT_MS=90000 -DPOWER_DEEP_SLEEP_SETTLE_MS=1000)
 endif()
 
 # Test variants only (BNK16_DEFS="-D..." for build-bnk16.sh), e.g. "-DBNK16_BOOT_DIAG -DBNK16_FAULT_DIAG".

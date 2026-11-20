@@ -1,11 +1,12 @@
 /*
- * BNK16 Vial keymap: numpad on layer 0, the Bluetooth keys in the top row of layer 3 and BATTERY_SHOW
- * bottom right on layer 3, layers 1-2 and the rest of layer 3 empty (layers are selected by the 4-position switch). Empty keys are KC_NO, so they stay
- * dark until assigned; encoder clicks and rotation stay transparent.
+ * BNK16 Vial keymap: numpad on layer 0, the board settings on layer 3 (Bluetooth, sleep time, LED mask,
+ * haptics, big knob, battery level), layers 1-2 empty (layers are selected by the 4-position switch).
+ * Empty keys are KC_NO, so they stay dark until assigned; encoder clicks and rotation stay transparent.
+ * Not on the default map: FACTORY_RESET and HAPTIC_BRAKE.
  *
  * Custom keycodes (same order as customKeycodes in vial.json):
  *   BT_1 / BT_2 / BT_3  tap: switch to that device, hold 3 s: pair it; nothing in the USB switch position
- *   BT_CLEAR            clear all bonds at once on a single tap, so not on the default map
+ *   BT_CLEAR            clear all bonds at once on a single tap
  *   FACTORY_RESET       hold 5 s: clear bonds and settings, then reboot
  *   HAPTIC_FREQ_DOWN/UP burst frequency, 8 Hz per press
  *   HAPTIC_LEN_DOWN/UP  burst length, 1 push pulse per press
@@ -15,6 +16,9 @@
  *   LED_MASK            light unassigned keys too / keep them dark (default)
  *   BATTERY_SHOW        status LED shows the battery level for 3 s: green, yellow-green, yellow, orange,
  *                       red in 20 % steps; nothing in the USB switch position (the switch cuts the battery)
+ *   SLEEP_TIME_DOWN/UP  light sleep time (LEDs off, all knobs work, before the deep sleep): 1 s, 1, 5 (default),
+ *                       10, 20, 30, 60 or 120 min
+ *   SETTINGS_TYPE       types all changeable settings as one line of text, without Enter
  */
 
 #include QMK_KEYBOARD_H
@@ -39,6 +43,9 @@ enum custom_keycodes {
     HAPTIC_RESET,
     LED_MASK,
     BATTERY_SHOW,
+    SLEEP_TIME_DOWN,
+    SLEEP_TIME_UP,
+    SETTINGS_TYPE,
 };
 
 // clang-format off
@@ -61,10 +68,10 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [1] = EMPTY_LAYER,
     [2] = EMPTY_LAYER,
     [3] = LAYOUT(
-        BT_1,    BT_2,    BT_3,    KC_NO,
-        KC_NO,   KC_NO,   KC_NO,   KC_NO,
-        KC_NO,   KC_NO,   KC_NO,   KC_NO,
-        KC_NO,   KC_NO,   KC_NO,   BATTERY_SHOW,
+        BT_1,           BT_2,           BT_3,           BT_CLEAR,
+        SLEEP_TIME_DOWN, SLEEP_TIME_UP, SETTINGS_TYPE, LED_MASK,
+        HAPTIC_FREQ_DOWN, HAPTIC_FREQ_UP, HAPTIC_LEN_DOWN, HAPTIC_LEN_UP,
+        KNOB_RES_DOWN,  KNOB_RES_UP,    HAPTIC_RESET,   BATTERY_SHOW,
         KC_TRNS, KC_TRNS
     ),
 };
@@ -114,8 +121,25 @@ bool bnk16_keycode_is_haptic_brake(uint16_t keycode) {
     return keycode == HAPTIC_BRAKE;
 }
 
-bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up) {
-    return keycode == (up ? KNOB_RES_UP : KNOB_RES_DOWN);
+/* The keys that change a setting with a range, for the key colour (bnk16.c): which setting, and up or down */
+uint8_t bnk16_keycode_setting(uint16_t keycode, bool *up) {
+    *up = keycode == KNOB_RES_UP || keycode == SLEEP_TIME_UP || keycode == HAPTIC_FREQ_UP || keycode == HAPTIC_LEN_UP;
+    switch (keycode) {
+        case KNOB_RES_DOWN:
+        case KNOB_RES_UP:
+            return BNK16_SETTING_KNOB;
+        case SLEEP_TIME_DOWN:
+        case SLEEP_TIME_UP:
+            return BNK16_SETTING_SLEEP;
+        case HAPTIC_FREQ_DOWN:
+        case HAPTIC_FREQ_UP:
+            return BNK16_SETTING_FREQ;
+        case HAPTIC_LEN_DOWN:
+        case HAPTIC_LEN_UP:
+            return BNK16_SETTING_LENGTH;
+        default:
+            return BNK16_SETTING_NONE;
+    }
 }
 
 /* Device number 1-3 of a BT key, 0 for any other key */
@@ -146,6 +170,17 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     if (keycode == LED_MASK) {
         if (record->event.pressed) {
             bnk16_toggle_show_unassigned();
+        }
+        return false;
+    }
+
+    if (keycode >= SLEEP_TIME_DOWN && keycode <= SETTINGS_TYPE) {
+        if (record->event.pressed) {
+            if (keycode == SETTINGS_TYPE) {
+                bnk16_type_settings();
+            } else {
+                bnk16_sleep_time_change(keycode == SLEEP_TIME_UP);
+            }
         }
         return false;
     }

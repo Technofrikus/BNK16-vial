@@ -37,7 +37,18 @@ void bnk16_haptic_toggle_brake(void);
 bool bnk16_haptic_brake_on(void);
 bool bnk16_keycode_is_haptic_brake(uint16_t keycode);
 uint8_t bnk16_knob_steps(void);
-bool bnk16_keycode_is_knob_res(uint16_t keycode, bool up);
+
+/* Light sleep time (the time between the LEDs going off and the deep sleep): SLEEP_TIME_DOWN/UP change it,
+ * bnk16_light_sleep_ms() is read by power_management.c. SETTINGS_TYPE types all settings as text */
+void bnk16_sleep_time_change(bool longer);
+uint32_t bnk16_light_sleep_ms(void);
+void bnk16_type_settings(void);
+
+/* The keys of the settings with a range light from green to red as they near the end of it (bnk16.c).
+ * bnk16_keycode_setting() is in keymap.c, bnk16_setting_room() says how many steps are left in the direction */
+enum { BNK16_SETTING_NONE = 0, BNK16_SETTING_KNOB, BNK16_SETTING_SLEEP, BNK16_SETTING_FREQ, BNK16_SETTING_LENGTH };
+uint8_t bnk16_keycode_setting(uint16_t keycode, bool *up);
+void bnk16_setting_room(uint8_t setting, bool up, uint8_t *left, uint8_t *range);
 
 /* LED settings and states, used by keymap.c */
 void bnk16_toggle_show_unassigned(void);

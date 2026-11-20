@@ -29,12 +29,14 @@ And a few things the stock firmware didn't have:
 
 - **Bluetooth status on the keys:** the key bound to the active Bluetooth device lights blue when connected and blinks while pairing or searching
 - **Only bound keys light up:** keys that have nothing assigned in Vial stay dark, so you can see your layout at a glance (there's a key to turn that off)
-- **Deep sleep with the Bluetooth link kept:** when idle in the Bluetooth position the chip sleeps between radio events and stays connected, so the first key press after a break is typed right away without reconnecting. About 800 µA at the 15 ms interval and about 200 µA at the slow level (15 ms with slave latency 7, so the first key after a break goes out at once; before it was 100-120 ms and the host took seconds to switch back), against 8.4 mA with the plain sleep before. A key, a knob or the slide switch wakes it, and the waking key is typed. After a long idle time the board shuts down completely (about 60 µA); a key then reboots and reconnects. Can be switched off at build time with `BNK16_DEEP_SLEEP` in `mcuconf.h`
-- **Status LED** shows the current layer by colour (white, purple, orange, green), blinks blue while connecting, flashes blue and red in turn if a connection fails
+- **Deep sleep with the Bluetooth link kept:** when you leave the board alone in the Bluetooth position, it goes to sleep but stays connected, so the first key after a break is typed right away. After a few hours it switches itself off completely, and a key press starts it again. More in [Saving power](#saving-power)
+- **Status LED** shows the current layer by colour (white, purple, orange, turquoise), blinks blue while connecting, flashes blue and red in turn if a connection fails
 - **Low battery warning:** below 20 % the status LED flashes red three times at the first key after a wake-up, then at most every 5 minutes (every minute below 10 %). Before the board shuts down on an empty battery the LED is red for 2 s; after such a shutdown it only starts again once the battery has been charged (it shows the red and switches off again until then)
 - **Battery level on a key:** `BATTERY_SHOW` lights the status LED for 3 s in green, yellow-green, yellow, orange or red, in 20 % steps
-- **Adjustable resolution for the big knob:** how many steps it sends per turn, changeable with two keys that go from green to red as you near the limit
+- **Adjustable resolution for the big knob:** how many steps it sends per turn, changeable with two keys
 - **Haptic settings** (frequency, length, brake pulse) changeable with keys and saved on the board
+- **Adjustable sleep time:** how long the board stays in light sleep before the deep sleep, for people who use the small right encoder a lot, see [Saving power](#saving-power)
+- **Settings keys show where you are:** the keys for the big knob, the haptics frequency and length and the sleep time light from green to red as you near the end of their range. **Type Current Settings** types all settings as text, so you can look them up
 
 And because it's Vial:
 
@@ -43,13 +45,13 @@ And because it's Vial:
 - All the modifier shortcuts (`LSA(KC__VOLUP)` and friends), media keys, mouse wheel
 - RGB effects, configurable in Vial's Lighting tab
 
-The Bluetooth, haptic, knob, battery and reset keys are under **User** in Vial's keycode list.
+The Bluetooth, haptic, knob, battery, sleep time and reset keys, and Type Current Settings, are under **User** in Vial's keycode list. What each one does is in [User keys](#user-keys).
 
 ## Default keymap
 
 | Control | Default |
 |---|---|
-| Keys | Numpad on layer 0, Bluetooth and special functions on layer 3, everything else empty |
+| Keys | Numpad on layer 0, the board settings on layer 3 (see [User keys](#user-keys)), layers 1 and 2 empty |
 | Small left encoder | Brightness, click = PlayPause |
 | Small right encoder | Page up/down, click = play/pause |
 | Big knob | Mouse wheel |
@@ -60,6 +62,72 @@ To pair a device, switch to layer 3 and hold BT1, BT2 or BT3 for 3 seconds. Tap 
 Vial is locked by default for the risky stuff (matrix tester, macros, bootloader key). To unlock, hold the top-left and top-right key when Vial asks.
 
 Holding the top-left key while plugging in starts the update mode (see [Updates](#updates-drag-and-drop)), so don't hold it when you plug in for normal use.
+
+## User keys
+
+Layer 3 is full of keys that change settings of the board itself. You find all of them under **User** in Vial, so you can also put them anywhere else. This is the default layer 3, and the list below explains every user key, also the two that are not on it:
+
+| | | | |
+|---|---|---|---|
+| BT1 | BT2 | BT3 | BT Clear |
+| Sleep Time Shorter | Sleep Time Longer | Type Current Settings | LED Mask |
+| Haptics Freq Down | Haptics Freq Up | Haptics Shorter | Haptics Longer |
+| Knob Lower Resolution | Knob Higher Resolution | Haptics Reset | Battery |
+
+- **BT1, BT2, BT3:** tap to switch to that device, hold for 3 seconds to pair it. They light blue when connected.
+- **BT Clear:** a single tap forgets all paired devices at once. Every device has to pair again. Careful, there is no question before it happens.
+- **Sleep Time Shorter / Longer:** how long the board waits before deep sleep. Only interesting if you use the small right encoder a lot, see [Saving power](#saving-power). The two keys light from green to red, like the knob keys below.
+- **Type Current Settings:** types all settings you can change as one line of text, for example `Sleep time 5 min, Haptic freq 128, Haptic length 2, Brake on, Knob steps 2, Unassigned LEDs off`, wherever your cursor is. Handy if you changed things and forgot what you set.
+- **LED Mask:** by default only keys with something assigned light up. This key switches that: all keys light, or back to only the assigned ones.
+- **Haptics Freq Down / Up:** how fast the motor buzzes, which changes how the buzz feels. Every press gives a test buzz, and the two keys light from green to red as you near the limit.
+- **Haptics Shorter / Longer:** how long one buzz of the motor lasts, again with a test buzz and the green to red colours.
+- **Haptics Brake Pulse On/Off** (not on the default map): adds a short counter pulse after each buzz that stops the motor faster. The key lights red when it is on and green when it is off.
+- **Knob Lower / Higher Resolution:** how many steps the big knob needs for one key press, so how many key presses and buzzes you get per turn. Higher means more per turn. The two keys light from green to red, so you see how far you can still go in that direction.
+- **Haptics Reset:** puts the haptics and the big knob back to their defaults. It does not touch the sleep time or the LED mask.
+- **Battery:** the status LED shows the battery level for 3 seconds, from green (full) over yellow and orange to red (almost empty). In the USB position it does nothing, because the slide switch cuts the battery there.
+- **Factory Reset** (not on the default map): hold it for 5 seconds to forget all paired devices and reset all settings, then the board restarts.
+
+## Saving power
+
+In the Bluetooth position the board looks after the battery by itself. In the USB position it never sleeps, because the slide switch cuts the battery there.
+
+1. **Awake:** while you use it.
+2. **Light sleep:** 15 seconds after your last input the LEDs go off. The board is still fully awake, so every key and every knob reacts immediately.
+3. **Deep sleep:** after the sleep time (5 minutes by default) the board really sleeps, but the Bluetooth connection stays up. Your first key after a break is typed right away.
+4. **Off:** 4 hours after your last input the board switches off completely. A key press starts it again and it reconnects, but that key press is not typed.
+
+With a USB cable in and a computer awake on the other end, the board doesn't go to deep sleep or switch off.
+
+In deep sleep, every key, the small left encoder, the big knob and the slide switch wake the board. Moving the layer switch does too, but it can take a moment. **The small right encoder can't wake the board.** The chip has no wake-up on those two pins and I can't change that. If you turn it after a break, nothing happens until something else has woken the board (a click on it is enough). The same is true when the board is switched off.
+
+### Why change the sleep time?
+
+Only for one reason: you use the small right encoder a lot. During light sleep it works, in deep sleep it doesn't. A longer sleep time keeps the board in light sleep longer, so the encoder stays usable, but light sleep uses a lot more power than deep sleep (about 40 times as much). If you don't care about that encoder, the default is fine, and if you want the maximum battery life, make it shorter.
+
+### The keys
+
+You find them under **User** in Vial:
+
+- **Sleep Time Shorter / Sleep Time Longer:** one step per press. The steps are 1 second, 1, 5 (default), 10, 20, 30, 60 and 120 minutes. The board buzzes once per press, like the haptics keys, and the two keys light from green (room left) to red (end of the range). To see the current value, use Type Current Settings under [User keys](#user-keys).
+
+The setting is saved on the board and survives updates. A factory reset puts it back to 5 minutes. A change counts from the next time the board falls asleep.
+
+### Which setting?
+
+How much battery life you lose depends on how often you take a break that is longer than the sleep time. These are rough guesses for 5 hours of use per day with 6 such breaks:
+
+| Sleep time | Battery lasts about |
+|---|---|
+| 1 second | 15 days |
+| 1 minute | 15 days |
+| 5 minutes (default) | 14 days |
+| 10 minutes | 14 days |
+| 20 minutes | 13 days |
+| 30 minutes | 12 days |
+| 60 minutes | 10 days |
+| 120 minutes | 7 days |
+
+With fewer breaks, or breaks shorter than the sleep time, you lose less. With your LEDs brighter than the default, everything gets shorter, but the differences between the rows stay about the same. Overnight and weekends cost nothing extra, because by then the board is in deep sleep or off.
 
 ## Flashing
 

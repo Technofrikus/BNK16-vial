@@ -108,8 +108,15 @@ static void layer_switch_task(void) {
     uint8_t        pos  = (matrix_is_on(0, 4) ? 1 : 0) | (matrix_is_on(1, 4) ? 2 : 0);
 
     if (pos != last && timer_read32() > LAYER_SWITCH_SETTLE_MS) {
-        last = pos;
+        bool first = last == 0xFF; /* the position read after boot is not a user action */
+        last       = pos;
         layer_move(pos);
+        if (!first) {
+            /* moving the switch counts as activity like a key (it is KC_NO, so process_record_user()
+             * never sees it): wakes the board from the light sleep and restarts the reconnect */
+            power_notify_activity();
+            ble_wake_from_standby();
+        }
     }
 }
 
@@ -184,7 +191,7 @@ static const rgb_t layer_colors[] = {
     {.r = 255, .g = 255, .b = 255}, /* white */
     {.r = 150, .g = 0, .b = 255},   /* purple */
     {.r = 255, .g = 100, .b = 0},   /* orange */
-    {.r = 0, .g = 255, .b = 0},     /* green */
+    {.r = 0, .g = 230, .b = 170},   /* turquoise, not green: green is the battery level */
 };
 
 #define STATUS_BATTERY_ON_MS    10000 /* on battery the layer colour goes off after this */
@@ -469,11 +476,13 @@ static bool key_color(uint16_t keycode, rgb_t *color) {
         *color = bnk16_haptic_brake_on() ? COLOR_RED : COLOR_GREEN;
         return true;
     }
-    /* the knob resolution keys go from green to red as they near the end of their range */
-    bool up = bnk16_keycode_is_knob_res(keycode, true);
-    if (up || bnk16_keycode_is_knob_res(keycode, false)) {
-        uint8_t range = BNK16_BIG_STEPS_PER_KEY_MAX - 1;
-        uint8_t left  = up ? bnk16_knob_steps() - 1 : BNK16_BIG_STEPS_PER_KEY_MAX - bnk16_knob_steps();
+    /* the keys of the settings with a range (knob resolution, sleep time, haptic frequency and length) go
+     * from green to red as they near the end of their range */
+    bool    up;
+    uint8_t setting = bnk16_keycode_setting(keycode, &up);
+    if (setting != BNK16_SETTING_NONE) {
+        uint8_t left, range;
+        bnk16_setting_room(setting, up, &left, &range);
         color->r      = 255 * (range - left) / range;
         color->g      = 255 * left / range;
         color->b      = 0;
@@ -576,8 +585,8 @@ static void leds_off_task(void) {
  * period out of phase with the drive, to counter the ringing. The drive can only push one way, so
  * this damps the motor instead of stopping it.
  * ======================================================================== */
-/* The board's settings word in EEPROM (eeconfig_read_kb): haptics, big knob resolution, the LED mask and
- * the empty battery flag */
+/* The board's settings word in EEPROM (eeconfig_read_kb): haptics, big knob resolution, the LED mask, the
+ * empty battery flag and the light sleep time */
 typedef union {
     uint32_t raw;
     struct {
@@ -587,7 +596,7 @@ typedef union {
         uint32_t brake : 1;
         uint32_t show_unassigned : 1; /* LED setting kept in this word: 0 = unassigned keys stay dark */
         uint32_t battery_empty : 1;   /* shut down on an empty battery, see battery_boot_check() */
-        uint32_t unused : 3;
+        uint32_t sleep_step : 3;      /* light sleep time, see sleep_steps[]; 0 = the default, so older words work */
         uint32_t magic : 8;
     };
 } kb_config_t;
@@ -667,9 +676,11 @@ static void haptic_save_and_buzz(void) {
 void bnk16_haptic_reset(void) {
     bool show_unassigned = kb_config.show_unassigned;
     bool battery_empty   = kb_config.battery_empty;
+    uint8_t sleep_step   = kb_config.sleep_step; /* the sleep time is not a haptic setting */
     kb_config_set_defaults();
     kb_config.show_unassigned = show_unassigned;
     kb_config.battery_empty   = battery_empty;
+    kb_config.sleep_step      = sleep_step;
     haptic_save_and_buzz();
 }
 
@@ -720,6 +731,87 @@ void bnk16_knob_change_resolution(bool up) {
         kb_config.knob_steps = up ? kb_config.knob_steps - 1 : kb_config.knob_steps + 1;
     }
     haptic_save_and_buzz();
+}
+
+/* Light sleep time: how long the board stays in the light sleep (LEDs off, all knobs work, about 40 times
+ * the current of the deep sleep) before the deep sleep starts. The stored value is the distance from the
+ * default (5 min), so a settings word written before this existed gives the default. */
+static const struct {
+    uint32_t    ms;
+    const char *label;
+} sleep_steps[] = {
+    { 1000, "1 s" },       { 60000, "1 min" },    { 300000, "5 min" },   { 600000, "10 min" },
+    { 1200000, "20 min" }, { 1800000, "30 min" }, { 3600000, "60 min" }, { 7200000, "120 min" },
+};
+#define SLEEP_STEP_DEFAULT 2
+
+static uint8_t sleep_step_index(void) {
+    return (kb_config.sleep_step + SLEEP_STEP_DEFAULT) & 7;
+}
+
+void bnk16_sleep_time_change(bool longer) {
+    uint8_t index = sleep_step_index();
+    if (longer ? index < ARRAY_SIZE(sleep_steps) - 1 : index > 0) {
+        index = longer ? index + 1 : index - 1;
+    }
+    kb_config.sleep_step = (index - SLEEP_STEP_DEFAULT) & 7;
+    haptic_save_and_buzz();
+}
+
+static const char *sleep_time_label(void) {
+    return sleep_steps[sleep_step_index()].label;
+}
+
+uint32_t bnk16_light_sleep_ms(void) {
+    return sleep_steps[sleep_step_index()].ms;
+}
+
+/* Steps left from the current value to the end of the range in the direction of the key */
+void bnk16_setting_room(uint8_t setting, bool up, uint8_t *left, uint8_t *range) {
+    switch (setting) {
+        case BNK16_SETTING_KNOB: /* higher resolution = fewer steps per key press */
+            *range = BNK16_BIG_STEPS_PER_KEY_MAX - 1;
+            *left  = up ? kb_config.knob_steps - 1 : BNK16_BIG_STEPS_PER_KEY_MAX - kb_config.knob_steps;
+            break;
+        case BNK16_SETTING_SLEEP:
+            *range = ARRAY_SIZE(sleep_steps) - 1;
+            *left  = up ? *range - sleep_step_index() : sleep_step_index();
+            break;
+        case BNK16_SETTING_FREQ:
+            *range = (BNK16_HAPTIC_FREQ_MAX - BNK16_HAPTIC_FREQ_MIN) / BNK16_HAPTIC_FREQ_STEP;
+            *left  = (up ? BNK16_HAPTIC_FREQ_MAX - kb_config.freq_hz : kb_config.freq_hz - BNK16_HAPTIC_FREQ_MIN) / BNK16_HAPTIC_FREQ_STEP;
+            break;
+        default: /* BNK16_SETTING_LENGTH */
+            *range = BNK16_HAPTIC_PULSES_MAX - 1;
+            *left  = up ? BNK16_HAPTIC_PULSES_MAX - kb_config.pulses : kb_config.pulses - 1;
+            break;
+    }
+}
+
+static void type_number(uint16_t n) {
+    char text[6];
+    uint8_t i = sizeof(text) - 1;
+    text[i] = '\0';
+    do {
+        text[--i] = '0' + n % 10;
+        n /= 10;
+    } while (n != 0);
+    send_string(&text[i]);
+}
+
+/* SETTINGS_TYPE: all settings as one line, no Enter. Only letters (no y and z, which swap places on a German
+ * keyboard), digits, spaces and commas: symbols sit on different keys in other keyboard languages. */
+void bnk16_type_settings(void) {
+    send_string("Sleep time ");
+    send_string(sleep_time_label());
+    send_string(", Haptic freq ");
+    type_number(kb_config.freq_hz);
+    send_string(", Haptic length ");
+    type_number(kb_config.pulses);
+    send_string(kb_config.brake ? ", Brake on" : ", Brake off");
+    send_string(", Knob steps ");
+    type_number(kb_config.knob_steps);
+    send_string(kb_config.show_unassigned ? ", Unassigned LEDs on" : ", Unassigned LEDs off");
 }
 
 bool bnk16_haptic_brake_on(void) {
@@ -915,6 +1007,7 @@ void matrix_scan_kb(void) {
  * ======================================================================== */
 #define SHUTDOWN_DISCONNECT_MS    300 /* lets the stack tell the host the link ends */
 #define DEEP_SLEEP_SWITCH_POLL_MS 500 /* PB11 check in deep sleep */
+#define DEEP_SLEEP_LAYER_POLL_MS  200 /* layer switch check in deep sleep */
 
 static const pin_t sleep_row_pins[] = MATRIX_ROW_PINS;
 static const pin_t sleep_col_pins[] = { B5, B4, B6, B7 };
@@ -1016,6 +1109,27 @@ __attribute__((noreturn)) void bnk16_shutdown(void) {
 #ifdef BNK16_DEEP_SLEEP
 static uint8_t  sleep_wake_ctrl; /* R8_SLP_WAKE_CTRL before the deep sleep */
 static uint32_t sleep_switch_poll;
+static uint32_t sleep_layer_poll;
+static uint8_t  sleep_layer_pos; /* layer switch position when the deep sleep started */
+
+/* Layer switch position (same coding as layer_switch_task()) in deep sleep: PB10 floats and the rows are
+ * low, so a pull-up on PB10 would read low in every position but 0. Each of the two rows is therefore
+ * selected alone (the other one high) and PB10 is read with its pull-up on for a few microseconds. */
+static uint8_t sleep_layer_sample(void) {
+    uint8_t pos = 0;
+    gpio_set_pin_input_high(B10);
+    for (uint8_t r = 0; r < 2; r++) {
+        pin_t other = sleep_row_pins[1 - r];
+        gpio_write_pin_high(other);
+        DelayUs(20);
+        if (!gpio_read_pin(B10)) {
+            pos |= 1 << r;
+        }
+        gpio_write_pin_low(other);
+    }
+    gpio_set_pin_input(B10);
+    return pos;
+}
 
 /* The USB HS port off (PHY suspended, its 480 MHz PLL and pins off). USBHS_Device_Init(DISABLE) cannot be
  * used: it also clears the system clock bits in R16_CLK_SYS_CFG. Only called with no host enumerated. */
@@ -1068,6 +1182,7 @@ void bnk16_deep_sleep_enter(void) {
     ws2812_power_toggle(false); /* already off in sleep; PA11 low = LED supply off */
     gpio_write_pin_low(WS2812_DI_PIN);
     bool key_down = sleep_pins_arm(false);
+    sleep_layer_pos = sleep_layer_sample();
 
     sleep_wake_ctrl = R8_SLP_WAKE_CTRL;
     sys_safe_access_enable();
@@ -1079,6 +1194,7 @@ void bnk16_deep_sleep_enter(void) {
         sleep_woken = true;
     }
     sleep_switch_poll = timer_read32();
+    sleep_layer_poll  = sleep_switch_poll;
     BNK16_STAGE(STAGE_DS_ARMED);
     bnk16_sleep_diag_ds_armed();
     SYS_RecoverIrq(irq_status);
@@ -1096,6 +1212,13 @@ bool bnk16_deep_sleep_poll(void) {
     /* the BLE stack may enable the RF antenna switch outputs (PB16-PB21) later on; PB21 is a matrix row */
     if (R16_PIN_ALTERNATE & RB_RF_ANT_SW_EN) {
         R16_PIN_ALTERNATE &= ~RB_RF_ANT_SW_EN;
+    }
+    /* the layer switch moved: wake, the matrix scan after the exit moves the layer and wakes the LEDs */
+    if (!sleep_woken && timer_elapsed32(sleep_layer_poll) >= DEEP_SLEEP_LAYER_POLL_MS) {
+        sleep_layer_poll = timer_read32();
+        if (sleep_layer_sample() != sleep_layer_pos) {
+            sleep_woken = true;
+        }
     }
     if (!sleep_woken && timer_elapsed32(sleep_switch_poll) >= DEEP_SLEEP_SWITCH_POLL_MS) {
         sleep_switch_poll = timer_read32();
